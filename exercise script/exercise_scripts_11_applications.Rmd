@@ -1,0 +1,830 @@
+---
+title: "| Environmental Systems Data Science (701-3001-00L)\n| Session 11:
+  Application 2 \n"
+author: "Chenwei Xiao"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Overview 
+The goal of this application is to put the concepts that we have learnt over all these weeks into practice.
+The task at hand is to predict the productivity of vegetation (GPP_NT_VUT_REF), using an ariticial neural network. For this task we will be using the CLEAN data, that we obtained after the data wrangling tutorial. 
+
+
+
+## Learning Goals 
+After this exercise session you should be able to  
+
+- Create training and testing splits (80/20)
+- Center and scale your data features (pre-processing)
+- Use k-Fold cross-validation for hyperparameter tuning 
+- Build and train a simple, 1 hidden layer NN for regression tasks 
+- Optimise the number of hidden layer units
+
+
+## Key Points from Previous Lectures  
+
+Here is a summary of the concepts from Lecture- 7: Supervised machine learning basics II and Lecture 9: Supervised learning: Basics 
+
+
+- It is always worthwhile to perform an initial exploratory analysis of your data, e.g. to identify outliers, missing values, etc.
+- To train a statistical model using machine learning, we split our data into training and testing sets. Sometimes we also include a validation set.
+- Testing data is set aside at the initial split and not "touched" during model training. It is key to test a model’s predictive power or whether it is overfitted. 
+- Validation data is used for determining the loss during model training. The reason for distinguishing between testing and validation data is to assure we're not misleading model training by some peculiarities of the validation data and we get an assessment of generalisability based on data that was not seen during model training.
+- Loss is a measure of how well our trained model predicts training labels. Loss is high when predictions are poor. Loss is low when predictions are good.
+- Model training minimises the loss on the training set. In other words, it optimises the agreement between predicted and observed values.
+- There are several ways to measure loss. RMSE (Root Mean Squared Error) is one such measure. It is used in regression problems.  
+- Gradient descent is a method that searches for model parameters that minimize loss.
+- Machine learning algorithms have hyperparameters. These are parameters that are set by the user rather than learned during training. An example is the learning rate in gradient descent. In the case of Aritificial Neural Networks, this can be the number of nodes per hidden layer, or the number of hidden layers. 
+- To tune a model, you can set hyperparameters that determine model structure or calibrate the coefficients. 
+- Generalisability refers to the model’s performance on data not seen during the training - the testing data.
+- To avoid overfitting, model generalisability is desired already during model training. One method to do this is cross validation. 
+- Data leakage is when data from the testing dataset creeps into the training data. To avoid this the testing set must be left completely untouched!
+- For explicit example on code for cross-validation by hand, refer the file on "Variable Selection", available under week 8 on moodle 
+- Also for examples on code to build a Neural Network, refer the notebooks from week 9 and 10! 
+
+
+## Problem Statement 
+For this exercise we can use the reduced and cleaned dataset with half-hourly data from exercise session 2 -- data wrangling. The task is to predict the *productivity of vegetation (GPP)*, using all the other features as predictor variables. Gross primary productivity (GPP) – the integral at the ecosystem level of the CO2 assimilation rate at the leaf level– is the ‘engine’ of C cycling in terrestrial ecosystems. GPP emerges as the dominant driver of year‐to‐year variations in the global land C balance. Thus being able to estimate the GPP value using the Fluxnet data can be extremely valuable.
+
+GPP_NT_VUT_REF from the dataset is the target variable and rest of the columns can be used as the input predictor variables. For the sake of limiting the task complexity, we assume the data to be IID (Independent and Identically Distributed), and treat each row in the dataset as an independent observation. In machine learning theory, i.i.d. assumption is often made for training datasets to imply that all samples stem from the same generative process and that the generative process is assumed to have no memory of past generated samples i.e. each sample is mutually independent. It is important to note that although we make this assumption, there still exists some temporal correlation between the half-hourly samples of the data-set, and thus our results at the end of the task may not be exactly optimal. 
+
+In the tutorial for lecture 6, 7 and applicaiton -1, we looked into building linear models that take in all the predictor variables, and evaluating the feature importance using step wise regression. But the caveat in this approach is that our predicor is limited to only linear functions of the predictor variables which will be unable to model non-linear relationships between the target variable and the predictor variables. Coming to lecture 9 and 10 we saw how Artificial Neural Networks are a power class of machine learning models, that enable us to model these non-linear relationships. Adding more hidden neural network allows us to model more complex relationships between the predictors and thus enable a better prediction. In this application build an artificial neural network  with the restriction of just 1 hidden layer, and look at the process of building, training and evaluating this model.    
+
+The predictors to this neural network are: 
+
+- TIMESTAMP_START : Time stamp start value -- ISO timestamp – short format
+- TIMESTAMP_END : Time stamp end value -- ISO timestamp – short format
+- TA_F : TA -- Air temperature ; _F -- Gap Filled 
+- SW_IN_F : Shortwave radiation, incoming -- Gap Filled 
+- LW_IN_F : Longwave radiation, incoming -- Gap Filled 
+- VPD_F : Vapor Pressure Deficit -- Gap Filled 
+- PA_F : Atmospheric pressure -- Gap Filled 
+- P_F : Precipitation -- Gap Filled 
+- WS_F : Wind speed -- Gap Filled 
+- CO2_F_MDS : CO2 -- Carbon Dioxide (CO2) mole fraction, _F_MDS -- Gap Filled using MDS method  
+- PPFD_IN : Photosynthetic photon flux density, incoming
+- GPP_NT_VUT_REF : Gross Primary Production, from Nighttime partitioning method; Variable USTAR Threshold (VUT)
+- SWC_F_MDS_1 : Soil water content (volumetric), range 0-100 -- Gap Filled using MDS method  -- Profile 1 of sensor 
+- SWC_F_MDS_2 : Soil water content (volumetric), range 0-100 -- Gap Filled using MDS method  -- Profile 2 of sensor 
+- SWC_F_MDS_3 : Soil water content (volumetric), range 0-100 -- Gap Filled using MDS method  -- Profile 3 of sensor 
+- WD : Wind direction
+- RH : Relative humidity, range 0-100
+- NIGHT : Flag indicating nighttime interval based on SW_IN_POT
+- NEE_VUT_REF_QC : Quality control flag for Net Ecosystem Exchange
+
+
+**Subtask 1**: Building a simple model, 1 hidden layer, using keras. Evaluate the model using the test-set, and check if the model can find a relationship between the predictor variables and the target variable. 
+
+**Subtask 2**: Perform 5 - Fold cross-validation on the model above. This is to assess the generalisability of the model 
+
+**Subtask 3**: Use cross validation to optimise hyperparameters such as number of hidden nodes and see how model complexity affects it's predictive performance
+
+Throughout the applicaiton we use mean squared error (MSE) loss as a metric for monitoring the performance. The list of tasks mentioned here are not exhaustive, you'll be guided through the application and asked questions along the way! 
+
+
+## Data preparation 
+
+
+```{r}
+## Loading the required libraries 
+library(keras)
+library(reticulate)
+library(caret)
+library(tidyverse)
+library(recipes)
+library(lubridate)
+library(reshape2)
+
+```
+
+------------------------------------------------------------------------------------------------
+IMPORTANT NOTE: READ CAREFULLY!
+Do not skip this part or you'll run into issues later on!
+In a moment, after you've read the following instructions carefully, you should:
+- run the code chunk immediately below this text (`use_session_with_seed(0)`). 
+- look down in the *Console* it asks if you want to install some packages: ("Would you like to install Miniconda? [Y/n]:"). 
+- write _n_ and press enter. You should see the following code in the console: `Would you like to install Miniconda? [Y/n]: n`. 
+Now, you can normally continue with the exercise.
+
+If you were too eager and already pressed _Y_ (yes) and enter, don't panic! Just close your environment, re-open it and make sure that next time you go with _n_ (no).
+
+
+```{r}
+use_session_with_seed(0)
+```
+
+
+```{r}
+### Read in the .csv file as a dataframe 
+## use read.csv instead of read_csv which recognize columns of double type as logical type.
+hhdf <- read.csv('../../data/FLX_CH-Lae_FLUXNET2015_FULLSET_HH_2004-2014_1-3_CLEAN.csv')
+
+hhdf %>% head()
+
+str(hhdf) # timestamp not POSIXct class.
+
+### Things to check when preprocessing 
+# Look at the structure and shape of the data (print it out using str())
+# Convert time-stamp columns using as.POSIXct() to convert them from a character to date-time object; Alternatively you can also use the library lubridate for this 
+# As we treat the observations as IID, we don't really need the time-stamp values as a feature variable, but we still retain them as they will be used for some time series plots later. 
+
+hhdf <- hhdf %>% mutate(TIMESTAMP_START = as.POSIXct(TIMESTAMP_START, format = "%Y-%m-%dT%H:%M:%SZ"),
+                        TIMESTAMP_END = as.POSIXct(TIMESTAMP_END, format = "%Y-%m-%dT%H:%M:%SZ"),
+                        NIGHT = as.factor(NIGHT),
+                        NEE_VUT_REF_QC = as.factor(NEE_VUT_REF_QC))
+
+### Check the structure of your data again (print it out using str())
+
+hhdf %>% head()
+
+str(hhdf)
+
+```
+
+
+Recall the tutorial on *data wrangling*, where we already performed some data-preprocessing. We replaced the missing value flag -9999 by NAs for the target variable GPP_NT_VUT_REF. 
+We had used the categorical variable NEE_VUT_REF_QC, representing the quality control, to further edit some of the values of the target variable GPP_NT_VUT_REF. For all those rows where $NEE\_VUT\_REF\_QC \in \{3,4\}$, i.e. poor quality of measurements, we replaced the target variable GPP_NT_VUT_REF with NAs.
+
+Thus we remove all the rows where the target variable is NA. As the target GPP_NT_VUT_REF is missing, we cannot learn or test against this data, so we remove all the rows where the target variable is missing. After we do this, the information that we previously encoded in NEE_VUT_REF_QC has already been used to filter out the rows with poor quality control measures. The variable NEE_VUT_REF_QC does not carry any additional information that would be helpful in predicting the target varibale. Consequently, we can discard this variable. 
+
+Side Note: NEE_VUT_REF_QC was the only categorical feature in our dataset, and by discarding it we got lucky. Neural networks in keras require input data in the form of matrices, and if we had any other categorical variables present in our data, we would have to encode these e.g. One-Hot Encoding vectors
+
+
+```{r}
+## Drop rows with NAs for GPP_NT_VUT_REF, and discard the column NEE_VUT_REF_QC
+hhdf2 <- hhdf %>% 
+  drop_na(GPP_NT_VUT_REF) %>%
+  select(-NEE_VUT_REF_QC)
+
+head(hhdf2)
+## Print the dimensionality of the data frame now to check how many rows have been deleted, and the num of columns remaining 
+
+dim(hhdf2)
+cat('There are',nrow(hhdf) - nrow(hhdf2), 'rows deleted')
+cat('There are',ncol(hhdf2), 'columns left')
+# 16732 rows deleted
+# 18 columns left
+
+## Print the summary() of your dataframe for some more information about your variables  
+
+summary(hhdf2)
+```
+
+
+We see that there are still a few variables with NAs. Let's see how many NAs each column has and what would be the number of rows in the resulting dataframe if we drop all rows with NAs 
+
+
+```{r}
+## Compute how many rows have NA values for each column, and report the result for each column, print the result 
+# e.g. 
+# TIMESTAMP_START                 0
+# TIMESTAMP_START0TIMESTAMP_END   0
+# TA_F                            abc
+# .
+# . 
+# . 
+# NIGHT                           xyz
+
+hhdf2 %>% 
+  summarise_all(funs(sum(is.na(.)))) %>% 
+  t()
+
+## Compute the rows we will be left with, if we drop all rows containing even a single NA. Print the result.
+
+hhdf3 <- hhdf2 %>% drop_na()
+
+cat('There are',nrow(hhdf3), 'rows remained if we drop all rows containinig even a single NA.')
+```
+
+The number of rows with NAs are not that large compared to the current size of the dataset. So we can afford to discard these rows without reducing the size of our dataset by much, and we still have enough data to carry out analysis. 
+
+*Sidenote: It can happen in some cases that by doing so we lose a majority of our dataset, because  each row has atleast 1 column with NA. If the number of rows reduced significantly by this operation, we would use some data imputation technique to fill-in these NA values. But also note that by doing so, we are introducing some bias to our model, by the data imputation technique we choose.*
+
+
+```{r}
+## drop all the rows with NAs
+
+hhdf_cleaned <- hhdf2 %>% drop_na()
+dim(hhdf_cleaned)
+
+## Here we create a few variables to reference different columns that might make preprocessing a little easier for us
+## Feel free to use or not use them in the subsequent steps; If you wish to use them, uncomment the lines below 
+
+time_cols <- c("TIMESTAMP_START","TIMESTAMP_END")
+target_variable <- c("GPP_NT_VUT_REF")
+column_names <- colnames(hhdf_cleaned)
+predictors <- column_names[! column_names %in% c(target_variable, time_cols)] ## time stamp columns and the target variables are not used as predictors
+
+cat('Target is: ',target_variable,'.')
+cat('Predictors are:',paste(predictors,collapse=", "),'.')
+```
+
+
+Next, we create indices to split the entire dataset into train and test (80/20) split. 
+
+80% of our data will be used to train the models and the leftover 20% will be our held-out test set to evaluate the performance of the model. 
+
+
+```{r}
+## set seed for reproducibility 
+set.seed(2020)
+## First shuffle the dataset (Hint: sample() )
+shuffled_id <- sample(x=1:nrow(hhdf_cleaned),size = nrow(hhdf_cleaned),replace = FALSE)
+hhdf_cleaned <- hhdf_cleaned[shuffled_id,]
+head(hhdf_cleaned)
+
+## get indices for train_data into train and test splits (Hint: sample() )
+# Make a breakpoint at 80%
+breakpoint <- as.integer(0.8 * nrow(hhdf_cleaned))
+
+## Use the  indicies to get test and train splits
+
+# Use this breakpoint to delineate the training data from the test data
+df_train <- hhdf_cleaned %>% slice(1:breakpoint)
+
+# Past the breakpoint is the test data
+df_test <- hhdf_cleaned %>% slice((breakpoint+1):nrow(hhdf_cleaned))
+```
+
+Next we separate the target variable from the predictors. 
+
+```{r}
+
+## Save time stamps for the test and train splits, as a separate data frame for time-series plots 
+time_train <- data.frame(
+  timestart_train = df_train$TIMESTAMP_START,
+  timeend_train = df_train$TIMESTAMP_END
+)
+
+time_test <- data.frame(
+  timestart_test = df_test$TIMESTAMP_START,
+  timeend_test = df_test$TIMESTAMP_END
+)
+
+## Separate the splits to get train_data, train_target, test_data and test_target. After this you should have 4 corresponding dataframes. Also drop the time stamp columns from the train data and test data as we treat the observations as IID. ( we have stored them separately for plots )
+
+X_train <- df_train[,predictors]
+X_test <- df_test[,predictors]
+
+y_train <- df_train[,target_variable]
+y_test <- df_test[,target_variable]
+
+```
+
+#### Center and scale data chunk
+
+Take care to extract the centering and scaling parameters from the training set and use them to center and scale your test data. 
+
+If you use the entire dataset to get the centering and scaling parameters, we actually use information from the test-data, which is something we don't have access to in real life. Thus doing so results in *information leakage* from the test data into the training, and we may get more optimistic results than our model's true predictions. Follow the steps below to carry out centering and scaling in a proper way: 
+
+- Extract normalisation parameters from train data for numeric predictors
+- Normalize train data using these parameters
+- Normalize test data using the parameters extracted from train data
+- Generally we only normalize the numeric variables and not the factors
+
+
+```{r}
+## Make use of recipe() or any other function you wish, to scale and center each of the columns
+
+pp <- recipe(GPP_NT_VUT_REF ~ ., data = df_train) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%        # normalizes numeric data to have a mean of zero
+  step_scale(all_numeric(), -all_outcomes())
+
+prep_ex <- prep(pp,training = df_train)
+
+df_train_baked <- bake(prep_ex, new_data = df_train)
+df_test_baked <-bake(prep_ex, new_data = df_test)
+
+## Display the summary of train data and test data
+summary(df_train_baked)
+summary(df_test_baked)
+
+X_train <- df_train_baked[,predictors]
+X_test <- df_test_baked[,predictors]
+
+```
+
+Are all of the columns in the training set centered perfectly with a mean = 0.0000? 
+Yes, as we use information from training set to do the centerize and scaling.
+
+Are all of the columns except for factor 'NIGHT' in the testing set centered perfectly with a mean = 0.0000? 
+No, because we know nothing about testing set to avoid data leakage.
+
+## Building a simple model with keras ( Subtask 1)
+The idea of this task is to investigate, if we can find a relationship between GPP and the rest of the predictor variables by the means of a single hidden layer Neural Network. And, if the predictor variables really help explain anything regarding our target variable.
+
+The input data needs to be in the form of an R array or matrix. Since all our features are numeric, we can safely convert the train and test datasets to matrices. 
+
+```{r}
+## Convert the "train_data", "train_targets", "test_data" and "test_targets", to matrix using as.matrix()
+X_train <- as.matrix(X_train)
+X_test <- as.matrix(X_test)
+
+y_train <- as.matrix(y_train)
+y_test <- as.matrix(y_test)
+
+```
+
+Now we can build a sequential model with keras. Define a model with 1 hidden layer with 20 units, and 1 output unit, for the target variable. Remember to specify a non-linear activation function such as Sigmoid or ReLU for the hidden layer, and a linear activation function for the output unit (as it is a regression task). If we don't specify a non-linear activation we will just be training a linear model! 
+When compiling the model take care to use appropriate optimizer, loss and evaluation metrics. Use mean squared error as the loss, and mean absolute error as the evaluation metric 
+
+*Side Note: Since our model is not very deep in this application, we can use any of the non-linear activations (tanh, sigmoid, or ReLu), but in practice when we train deep neural networks (with a large number of hidden layers) we prefer to use ReLU as the activation function, as it does not suffer from the problem of Vanishing or Exploding gradients (which happens if we use sigmoid or tanh). In a nutshell : In a network of n hidden layers, n derivatives will be multiplied together. If the derivatives are large then the gradient will increase exponentially as we propagate down the model until they eventually explode, and this is what we call the problem of exploding gradient. Alternatively, if the derivatives are small then the gradient will decrease exponentially as we propagate through the model until it eventually vanishes, and this is the vanishing gradient problem. [Source for the interested!](https://towardsdatascience.com/the-vanishing-exploding-gradient-problem-in-deep-neural-networks-191358470c11)*
+
+```{r}
+## Define and compile the model 
+#Learning rate
+learning_rate <- 0.01
+opt <- optimizer_adam(lr = learning_rate)
+
+model <- keras_model_sequential()
+model %>% 
+  layer_dense(units=20, input_shape=ncol(X_train), activation="relu") %>%
+  layer_dense(units=1, activation="linear") %>%
+  compile(optimizer=opt, 
+          loss='mean_squared_error', 
+          metrics= list('mean_absolute_error'))
+
+## Print the summary of the model using summary()
+summary(model)
+
+```
+
+How many training parameters are needed? Try to explain the number of parameters to be learnt for each layer in terms of a weight matrix and bias vector. 
+A total of 341 parameters are required. For the hidden layer of 20 units, there are weight matrix of 15*20 size and a bias vector of 20 size. For the output layer of 1 unit, there are weifht matrix of 1 multiply 20 size and a bias vector of 1 size.
+
+
+```{r}
+## Fit the model and store the training history. Use a reasonable batch_size, epochs, and validation_split
+## A good starting point would be batch_size = 128, validation split = 0.1 and using 50 epochs
+## The validation split here is a portion of the training data that is kept aside to evaluate the loss and evaluation metric at the end of each epoch. The model will set apart this fraction of the training data, will not train on it, and will evaluate the loss and any model metrics on this data at the end of each epoch. The validation data is selected from the last samples in the x and y data provided, before shuffling. This is useful for stopping training after a certain number of epochs if we see the validation error increasing with training. We can also program the model to do so, this is called Early Stopping. 
+## This can be done by using a training callback for early stopping: callback_early_stopping()
+## More info on training callbacks: https://keras.rstudio.com/articles/training_callbacks.html
+## More info on the fit function https://keras.rstudio.com/reference/fit.html
+
+## You can choose the number of epochs to train, manually by monitoring the validation loss while training and selecting the number of epochs where the validation loss starts to increase. Alternatively you can use early stopping to pause the model training at an optimal point for you. Choose whatever method you feel is best! 
+
+
+# history <- fit ()
+# Number of epochs
+num_epochs = 50
+# Batch size
+batch_size = 128
+
+# Early stopping
+early_stop <- callback_early_stopping(monitor = "val_loss", patience = 20)
+
+
+history <- model %>% fit(x = X_train,
+                         y = y_train,
+                         epochs=num_epochs,
+                         batch_size=batch_size,
+                         validation_split=0.1,
+                         callbacks = early_stop
+                         )
+
+```
+
+Now that the model training is complete we can look at the history, plot the training history, and look at our trained weights. Pay attention to the trained parameters and try to identify the weight matrix and the bias vector.   
+
+```{r}
+## print(history)
+print(history)
+## plot history 
+plot(history)
+## get_weights()
+weight_ls <- get_weights(model)
+
+sapply(weight_ls,dim)
+# The first array is the hidden layer weight matrix
+# The second arrary is the hidden layer bias vector
+# The third array is the output layer weight matrix
+# The forth array is the output layer bias vector
+```
+
+Now we can evaluate our model predictions on the held-out testing set. 
+
+```{r}
+## make predictions and evaluate using test set 
+y_train_pred <- model %>% predict(X_train)
+y_test_pred <- model %>% predict(X_test)
+
+```
+
+Next we can plot the model predictions along with the observed data for the test and training dataset. Check if the model predictions actually follow the trend in the data. 
+
+```{r}
+
+## plot the test data observations along with the test data predictions. Use color red for predictions, and blue for the observed data.
+df_plt1 <- data.frame(time_test$timestart_test,y_test,y_test_pred)
+
+plt1 <- df_plt1 %>% 
+  ggplot(aes(x=time_test.timestart_test,y=y_test)) +
+  geom_line(aes(color = 'Observation')) +
+  geom_line(aes(x=time_test.timestart_test,y=y_test_pred,color = 'Prediction'),alpha = 0.5) +
+  scale_color_manual(values = c("blue", "red")) +
+  xlab('Time') + ylab(expression(paste("GPP (gC m"^-2, "s"^-1, ")"))) +
+  labs(color = 'Type',title = 'Gross primary productivity of test set')
+
+plt1
+
+
+## plot the train data observations along with the train data predictions. Use color red for predictions, and blue for the observed data.
+df_plt2 <- data.frame(time_train$timestart_train,y_train,y_train_pred)
+
+plt2 <- df_plt2 %>% 
+  ggplot(aes(x=time_train.timestart_train,y=y_train)) +
+  geom_line(aes(color = 'Observation')) +
+  geom_line(aes(x=time_train.timestart_train,y=y_train_pred,color = 'Prediction'),alpha = 0.5) +
+  scale_color_manual(values = c("blue", "red")) +
+  xlab('Time') + ylab(expression(paste("GPP (gC m"^-2, "s"^-1, ")"))) +
+  labs(color = 'Type',title = 'Gross primary productivity of train set')
+
+plt2
+
+## Hint: For both the plots above, edit the alpha value such that the test data observations and the test data predictions both can be seen even with overlap 
+```
+
+Nice! From our domain knowledge we know that the target varible GPP_NT_VUT_REF cannot be negative, but our dataset contains some negative observations because of noisy measurements. From the plot we see that the model learns the trends in the data, without learning the noise. 
+
+
+Finally let's make a plot of our predictions v/s observed data. In an ideal world this should be a straight line y=x, giving us a Pearson's correlation coefficient of 1, but because of the noise in data we can expect some deviations from the ideal result. 
+
+```{r}
+## plot test set predictions v/s test set observations (from the test dataset)
+ggplot(data.frame('test' = c(y_test),'pred' = c(y_test_pred)), 
+       aes(x=test, y=pred)) + geom_point() +
+  geom_abline(aes(intercept = 0,slope = 1,color = 'y=x'), size = 1) +
+  geom_smooth(method='lm',aes(color = 'linear smooth line'))+
+  labs(x='Observation',y='Prediction',title = 'Gross primary productivity of test set',
+       color = 'Line type')
+## compute the correlation coefficient
+
+cat('The Pearson\'s coorelation between prediction and observation in test set is ',cor(x=y_test,y=y_test_pred,method='pearson'))
+```
+
+What is the Pearson's correlation coefficient obtained for this ? 
+The Pearson's correlation for test set is 0.835.
+
+
+## Cross validation (SubTask 2)
+Having done the sub-task 1 we have a rough idea of how well our model generalises against unseen data. But, we are restricted to using only a single test-set. K-Fold cross-validion provides a method to assess the generalisability of the model in a more robust way. By evaluating the model k times, using a differnet test set at each fold, we use entire data to evaluate the model's predictive ability.
+
+Aditionally, to optimise the hyperparameters of the network we should not use the evaluation metrics obtained on only the test set (as in Task 1) to select these hyperparameters. If we tune our model hyperparameters using results from the test set, then the performance of our best model on the test set underestimates the true risk of our model. In the following steps we repeat the same procedure discussed up to  now, but with 5-fold cross validation. We will do cross validation "by-hand", as we try to avoid using caret here, and doing so by hand gives us a more fine grain control. 
+
+Let's put the model creation and training in a function which takes the different hyperparameters as inputs. This will make it easier to build a model from inside a cross validation loop. 
+
+Write a function, that does all the above steps, and returns a trained model. This will come in handy when we perform cross-validation. 
+
+```{r}
+# Function name: build_model()  
+# Inputs: Training data, Training target, number of hidden units, activation type, number of epochs, batch size and validation size  
+# Output: List of 2 objects --> trained model, and the training history 
+## We also return the training history in case we want to make plots of the training process for each of the folds  
+
+build_model <- function(X_train,y_train,
+                        num_hidden_units = 20,
+                        learning_rate = 0.01,
+                        activation_type = "relu",
+                        num_of_epochs = 100,
+                        batch_size = 128,
+                        validation_size = 0.1){
+
+  model <- keras_model_sequential()
+  
+  opt <- optimizer_adam(lr = learning_rate)
+  
+  model %>% 
+  layer_dense(units= num_hidden_units, input_shape=ncol(X_train), activation=activation_type) %>%
+  layer_dense(units=1, activation="linear") %>%
+  compile(optimizer=opt, 
+          loss='mean_squared_error', 
+          metrics= list('mean_absolute_error'))
+  
+  summary(model)
+
+  # Early stopping
+  early_stop <- callback_early_stopping(monitor = "val_loss",min_delta = 0.1, patience = 20)
+
+
+  history <- model %>% fit(
+    x = X_train,
+    y = y_train,
+    epochs=num_of_epochs,
+    batch_size=batch_size,
+    validation_split=validation_size,
+    callbacks = early_stop
+    )
+  
+  return(list(model = model, history = history))
+  
+}
+```
+
+Now we perform 5-Fold CV, "by hand" for the model we used in Subtask 1. Use the same parameters for building the model as used in Task 1 and evaluate the model using cross-validation.  
+
+```{r}
+# We prepare our cross validation splits. First we randomly shuffle the initial train set. 
+# Note: Use the data that we obtained from the train split, from before we centered and scaled the data. 
+# Using the previously centered and scaled data, will introduce information leak into the cross-validation folds 
+
+# shuffle
+set.seed(0) 
+
+#Shuffle the data
+shuffled_id = sample(x=1:nrow(df_train),size = nrow(df_train),replace = FALSE)
+df_train_cv <- df_train[shuffled_id,]
+
+
+#Create 5 equally large folds
+## hint: folds <- cut(seq(1,nrow(cv_data)),breaks=5,labels=FALSE)
+folds <- cut(seq(1,nrow(df_train_cv)),breaks=5,labels=FALSE)
+
+## create a list, to store the results across different folds
+cv_performance_list <- list()
+history_list <- list()
+
+
+#Perform 5 fold cross validation
+for(i in 1:5){
+  cat(sprintf("CV Fold --> %i/5\n", i))
+  #Segment the data by fold 
+  ## hint : indices <- which(folds==i,arr.ind=TRUE)
+  indices <- which(folds==i,arr.ind=TRUE)
+
+  ## indices is a vector with TRUE for the rows where the folds == i; and FALSE for the rest of the row
+  ## indices which are TRUE for a particular loop form the cross-validation test set for that loop  
+  ## Segment data as cv_test data and cv_train data using the indices. 
+  cv_test <- df_train_cv[indices,]
+  cv_train <- df_train_cv[-indices,]  
+  ## Now we just repeat the steps we did previously
+  
+  ## Seperate out the cv_test_data, cv_test_targets, cv_train_data, cv_train_targets. We won't be making any time series plots when cross-validating, so we can drop the timestamp columns
+  cv_train_data <- cv_train[,predictors]
+  cv_test_data <- cv_test[,predictors]
+  
+  cv_train_target <- cv_train[,target_variable]
+  cv_test_target <- cv_test[,target_variable]
+  
+  # scale and center using cv_train_data 
+  # get the statistics (mean, variance, etc) of numeric cols 
+  pp <- recipe(x = cv_train_data) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric())
+
+  prep_ex <- prep(pp,training = cv_train_data)
+  
+  # transform the cv_train_data and cv_test_data to center and scale it 
+  cv_train_data <- bake(prep_ex, new_data = cv_train_data)
+  cv_test_data <-bake(prep_ex, new_data = cv_test_data)
+  
+  ## Convert data using as.matrix() 
+  cv_train_data <- as.matrix(cv_train_data)
+  cv_test_data <- as.matrix(cv_test_data)
+  cv_train_target <- as.matrix(cv_train_target)
+  cv_test_target <- as.matrix(cv_test_target)
+  
+
+  ## train a model using the build_model() function we wrote previously  
+  c(cv_model,cv_history) %<-% build_model(
+    X_train = cv_train_data,
+    y_train = cv_train_target,
+    num_hidden_units = 20,
+    learning_rate = 0.01,
+    activation_type = "relu",
+    num_of_epochs = 50,
+    batch_size = 512,
+    validation_size = 0.1
+  )
+  
+  
+  #  get the evaluation error on the test folds 
+  #  Use mean absolute error to evaluate the performance on the test fold
+  cv_test_target_pred <- cv_model %>% predict(cv_test_data)
+  cv_mse <- mean((cv_test_target_pred - cv_test_target)^2)
+
+#   Store the results in the lists we made outside the loop 
+  cv_performance_list <- c(cv_performance_list,cv_mse)
+  history_list <- c(history_list,list(cv_history))
+}
+
+cv_performance_list
+history_list
+```
+
+
+After running this loop we have trained 5 different models, on our cross validation folds, and logged the evaluation results in "cv_performance_list". Next we want to plot the MSE (mean square error), across the 5 cross validation test folds. Use the list containing these results to make the plot. Taking an average of the cross validation test score (MSE) for all the different folds, we get the average cross validation loss, which can then be used in model tuning. 
+
+```{r}
+## Plot the training history for all the 5 folds 
+
+plot(history_list[[1]])
+plot(history_list[[2]])
+plot(history_list[[3]])
+plot(history_list[[4]])
+plot(history_list[[5]])
+
+## plot MSE across cross validation test folds
+ggplot(data.frame(x=1:5,y=unlist(cv_performance_list))) +
+  geom_line(aes(x=x,y=y)) +
+  labs(x='Folds',y='MSE',title = 'Mean square error across the 5 cross validation test folds')
+
+
+## compute the average MSE across folds
+MSE_average <- mean(unlist(cv_performance_list))
+cat('Average MSE is',MSE_average)
+
+```
+
+What is the average cross validation error obtained for this configuration of the network ? 
+The average cross validation error obtained is 23.54 (MSE).
+
+## Cross Validation for parameter tuning  (SubTask 3)
+
+The parameter to tune is the number of units in our hidden layer. The hidden units in-turn determine the dimensionality to which the input predictors are mapped, effectively giving a more complex model. The task is to determine the optimal number of hidden units. How do you think the model complexity affects it's predictive performance? Does simplyfying the model too much lead to a reduction in the prediction performance? 
+If simplifying the model too much, it will not be able to learn complex non-linear relationship between our target variable and predictors. However, if the model is too complex, its generalism is not enough and may lead to higher variance and higher error in validation/test set. It is essential to find an appropriate complexity of the model, here is the number of units in our hidden layer. 
+
+
+Here we will write a function that does the cross-validation for paramater tuning. The content of the cross-validation code remains the same as we have seen before. This is the same code written as a function that also takes the hyperparameter to be tuned as an argument.
+Your task is to optimise the number of hidden units. 
+First we will orgainse all the steps done until now to write the function. 
+
+```{r}
+# Function Name: cross_validate_model()  
+# Inputs: Training split, number of hidden units, and number of epochs  
+# Output: The avergae cross validation loss across all 5 folds. 
+
+## Hint: All you have to do is organise the steps we followed in the crossvalidation section as a function to make it reproducible  
+cross_validate_model <- function(train_split, num_units, num_epochs){
+  
+  df_train <- train_split
+  # shuffle
+  set.seed(0) 
+  
+  #Shuffle the data
+  shuffled_id = sample(x=1:nrow(df_train),size = nrow(df_train),replace = FALSE)
+  df_train_cv <- df_train[shuffled_id,]
+  
+  
+  #Create 5 equally large folds
+  ## hint: folds <- cut(seq(1,nrow(cv_data)),breaks=5,labels=FALSE)
+  folds <- cut(seq(1,nrow(df_train_cv)),breaks=5,labels=FALSE)
+  
+  ## create a list, to store the results across different folds
+  cv_performance_list <- c()
+  
+  #Perform 5 fold cross validation
+  for(i in 1:5){
+    cat(sprintf("CV Fold --> %i/5\n", i))
+    #Segment the data by fold 
+    ## hint : indices <- which(folds==i,arr.ind=TRUE)
+    indices <- which(folds==i,arr.ind=TRUE)
+  
+    ## indices is a vector with TRUE for the rows where the folds == i; and FALSE for the rest of the row
+    ## indices which are TRUE for a particular loop form the cross-validation test set for that loop  
+    ## Segment data as cv_test data and cv_train data using the indices. 
+    cv_test <- df_train_cv[indices,]
+    cv_train <- df_train_cv[-indices,]  
+    ## Now we just repeat the steps we did previously
+    
+    ## Seperate out the cv_test_data, cv_test_targets, cv_train_data, cv_train_targets. We won't be making any time series plots when cross-validating, so we can drop the timestamp columns
+    cv_train_data <- cv_train[,predictors]
+    cv_test_data <- cv_test[,predictors]
+    
+    cv_train_target <- cv_train[,target_variable]
+    cv_test_target <- cv_test[,target_variable]
+    
+    # scale and center using cv_train_data 
+    # get the statistics (mean, variance, etc) of numeric cols 
+    pp <- recipe(x = cv_train_data) %>%
+    step_center(all_numeric()) %>%
+    step_scale(all_numeric())
+  
+    prep_ex <- prep(pp,training = cv_train_data)
+    
+    # transform the cv_train_data and cv_test_data to center and scale it 
+    cv_train_data <- bake(prep_ex, new_data = cv_train_data)
+    cv_test_data <-bake(prep_ex, new_data = cv_test_data)
+    
+    ## Convert data using as.matrix() 
+    cv_train_data <- as.matrix(cv_train_data)
+    cv_test_data <- as.matrix(cv_test_data)
+    cv_train_target <- as.matrix(cv_train_target)
+    cv_test_target <- as.matrix(cv_test_target)
+    
+  
+    ## train a model using the build_model() function we wrote previously  
+    c(cv_model,cv_history) %<-% build_model(
+      X_train = cv_train_data,
+      y_train = cv_train_target,
+      num_hidden_units = num_units,
+      learning_rate = 0.01,
+      activation_type = "relu",
+      num_of_epochs = num_epochs,
+      batch_size = 512,
+      validation_size = 0.1
+    )
+    
+    
+    #  get the evaluation error on the test folds 
+    #  Use mean absolute error to evaluate the performance on the test fold
+    cv_test_target_pred <- cv_model %>% predict(cv_test_data)
+    cv_mse <- mean((cv_test_target_pred - cv_test_target)^2)
+  
+  #   Store the results in the lists we made outside the loop 
+    cv_performance_list <- c(cv_performance_list,cv_mse)
+  }
+
+  return(mean(cv_performance_list))
+}
+
+```
+
+Next you need to write a function to iterate over the list of hyperparameters. In each iteration we iterate over a list of the possible number of hidden units, and compute the average cross-validation error. 
+
+
+
+```{r}
+# Function Name: tune_num_units()  
+# Inputs: training split, num_units --> a vector containing the possible values of hidden units  
+# Output: List / vector containing the average cross validation loss for each possible value of hidden units  
+
+tune_num_units <- function(train_split,  num_units){
+  
+  ## create an empty list to store the average loss for each value in num_units 
+  loss_ls <- c() # MSE as loss
+  ## write a loop to iterate over num_units and store the average cross validation loss 
+  for(i_num_units in num_units){
+    i_loss <- cross_validate_model(train_split = train_split, num_units = i_num_units, num_epochs = 50)
+    loss_ls <- c(loss_ls,i_loss)
+  }
+  
+  return(loss_ls)
+
+}
+
+```
+
+
+Now let's consider the given vector "num_units" for tuning the number of hidden units 
+
+```{r}
+num_units <- c(1,3,10,30,100)
+
+
+## compute the average cross validation loss for each element in num_units using tune_num_units()
+loss_ls <-c()
+loss_ls <- tune_num_units(train_split = df_train, num_units = num_units)
+
+## Print out the results 
+cat('The average MSE loss of 5 model sets are', paste(round(loss_ls,2),collapse=", "))
+
+## Plot the average cross validation loss, as a function of the num_units 
+ggplot(data.frame(x=num_units,y=loss_ls)) +
+  geom_line(aes(x=x,y=y)) +
+  labs(x= 'num_units',y='cross validation loss',title = 'Cross validation loss of different hidden layer units')
+
+## What is the number of hidden units that gives the minimum loss ? 
+cat('The number of hidden units that gives the minimum loss is', num_units[which.min(loss_ls)])
+
+
+```
+
+
+What is the most practical number of hidden units in your opinion? (What is a good the tradeoff between the reduction in MSE loss with the increase in hidden units and the increase in training time and model complexity, as well as the number of parameters to be learnt)
+
+From the cost of time and cpu power as well as the improvement of cross-validation loss, I think the best and most practical number of hidden layer units is 30. As the cross-validation loss only decrease by less than 1 from unit=30 to unit=100. But the time consumed is much longer and the number of training parameters explodes.
+
+
+Finally, in practice, when you arrive at the optimal model parameters after cross-validation, you train a new model, using the entire training set, and use the initial held-out test set (20%) to evaluate the model's performance on new data.  
+
+```{r}
+# Use the best hyperparameters to train a model
+c(model,history) %<-% build_model(
+    X_train = X_train,
+    y_train = y_train,
+    num_hidden_units = 30,
+    learning_rate = 0.01,
+    activation_type = "relu",
+    num_of_epochs = 50,
+    batch_size = 512,
+    validation_size = 0.1
+  )
+
+
+# Make prediction on test set and calculate MSE,MAE
+y_test_pred <- model %>% predict(X_test)
+
+cat('MSE of prediction on test data is:',mean((y_test_pred-y_test)^2))
+cat('MAE of prediction on test data is:',mean(abs(y_test_pred-y_test)))
+
+
+```

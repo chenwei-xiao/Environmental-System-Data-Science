@@ -1,0 +1,294 @@
+---
+title: "Exercise 12"
+author: 'Chenwei Xiao'
+date: 2020/12/02
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The purpose of this exercise is to create a CNN model for a multiclass classification problem. 
+
+So far, a binary classification problem was considered. However, in practice, there are several cases where more than 2 classes have to be considered. For example, the [mnist](https://en.wikipedia.org/wiki/MNIST_database) dataset consists of handwritten digit images and in total contains 10 different classes (number 0 to number 9). 
+
+The goal of this exercise is to create a model that takes the handwritten image as input and predicts the number which is written in this image.
+
+Regarding the modelling part of multiclass classification problem the only thing that changes, compared to a binary classification problem, is the number of nodes and the activation function on the output layer. Also, a different loss function has to be considered ('categorical_crossentropy'). In other words, the number of nodes of the output layer should equal the number of discrete classes (10 in our case). 
+Furthermore, the activation function of the output layer is the 'softmax' activation which converts each output node to a probability of the corresponding class. Therefore, for a prediction, we choose the class where its node gives the maximum probability.
+
+Furthermore, a skeleton code is provided which does the preprocessing and creates a baseline model.
+
+
+Your task is to create a CNN architecture that outperforms the baseline model. The data are class balanced so accuracy can be used in this case. You should use dropout and/or regularization to avoid overfitting. Also, comment on the number of trainable parameters for each model. 
+
+
+
+### Import libraries
+```{r}
+library(reticulate)
+use_condaenv()
+library(keras)
+library(tensorflow)
+library(tidyverse)
+library(rsample)
+```
+
+IMPORTANT NOTE: READ CAREFULLY!
+
+Do not skip this part or you'll run into issues later on!
+In a moment, after you've read the following instructions carefully, you should:
+- run the code chunk immediately below this text (`keras_model_sequential()`). 
+- look down in the *Console* it asks if you want to install some packages: ("Would you like to install Miniconda? [Y/n]:"). 
+- write _n_ and press enter. You should see the following code in the console: `Would you like to install Miniconda? [Y/n]: n`. 
+Now, you can normally continue with the exercise.
+
+If you were too eager and already pressed _Y_ (yes) and enter, don't panic! Just close your environment, re-open it and make sure that next time you go with _n_ (no).
+
+```{r eval =F}
+keras_model_sequential()
+```
+
+
+
+### Load mnist dataset 
+
+```{r}
+mnist = dataset_mnist()
+
+# take train and test set
+train = mnist$train
+test = mnist$test
+```
+
+
+### Plot an image
+```{r}
+index_image = 37 ## change this index to see different image.
+input_matrix = train$x[index_image,,]
+output_matrix <- apply(input_matrix, 2, rev)
+output_matrix <- t(output_matrix)
+image(output_matrix, col=gray.colors(256), xlab=paste('Image for digit ', train$y[index_image]), ylab="")
+```
+
+### Specify image size and number of classes
+
+```{r}
+img_size = dim(train$x)[2:3]
+img_channels = 1
+n_classes = length(unique(train$y))
+cat('Image size: ',c(img_size,img_channels),"\n")
+cat('Total classes: ',n_classes)
+```
+
+
+### Create a validation set using stratified split and rescale input to [0,1]
+
+```{r}
+#make stratified split
+split = initial_split(data.frame('y'=train$y),prop = 0.8,strata = 'y')
+
+#train set
+x_train = train$x[split$in_id,,]
+##rescale to [0,1]
+x_train = x_train/255
+y_train = train$y[split$in_id]
+
+#validation set
+x_val = train$x[-split$in_id,,]
+##rescale to [0,1]
+x_val = x_val/255
+y_val = train$y[-split$in_id]
+
+#test set
+x_test = test$x
+##rescale to [0,1]
+x_test = x_test/255
+y_test = test$y
+
+```
+
+### Encode classes to one-hot vectors
+
+```{r}
+y_train = to_categorical(y_train, n_classes)
+y_val =  to_categorical(y_val,n_classes)
+y_test = to_categorical(y_test, n_classes)
+
+head(y_train)
+```
+
+### Create and train the baseline model
+
+A simple approach would be to create a vector (flatten the 2d input matrix) from the input image and then to apply a feed-forward neural network (i.e. dense layers). You are already provided with a trained model (because it takes a long time to train it from scratch), so you do not have to run the fit function. You just have to load the model.
+
+You don't have to run the following chunk but have a look at this model nevertheless.
+
+```{r eval=F}
+# eval = F means that the knit will not run this chunk
+ffnn_model = keras_model_sequential()
+
+ffnn_model %>% layer_flatten(input_shape = img_size) %>%
+          layer_dense(units = 1024,activation = 'relu')%>%
+          layer_dense(units = 512,activation = 'relu')%>%
+          layer_dense(units = 256,activation = 'relu') %>%
+          layer_dense(units = 128,activation = 'relu') %>%
+          layer_dense(units = 10,activation = 'softmax')
+
+ffnn_model %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_adam(lr = 0.001),
+  metrics = c('accuracy')
+)
+
+dir.create(file.path('saved_models'))
+save_ffnn = file.path('saved_models','baseline.h5') 
+  
+callbacks_ffnn = list(callback_early_stopping(monitor='val_loss',patience = 5,mode = 'min'),
+                      callback_model_checkpoint(save_ffnn,monitor='val_loss',save_best_only = T,mode = 'min'))
+
+#history_ffnn = fit(ffnn_model,x_train, y_train, epochs = 20, batch_size = 128,
+#                  validation_data = list(x_val,y_val),callbacks = callbacks_ffnn)
+```
+
+### Load the saved Baseline model and evaluate the performance on validation and test set
+
+```{r}
+save_ffnn = file.path('saved_models','baseline.h5')
+model_ffnn = load_model_hdf5(save_ffnn)
+
+#evalute accuracy
+val_acc = evaluate(model_ffnn,x_val,y_val)$acc
+test_acc = evaluate(model_ffnn,x_test,y_test)$acc
+
+cat('Validation Accuracy: ',val_acc,'\n')
+cat('Test Accuracy: ',test_acc,'\n')
+```
+
+
+
+### Create a CNN architecture
+
+```{r}
+build_model <- function(L2_rate = 0, drop_rate = 0){
+  #Name the model
+  model.name = paste('convnet_L2_',L2_rate,'_dropout_',drop_rate,sep="")  
+    
+  #sequential model
+  model = keras_model_sequential(name = model.name)
+  
+  model = model %>%
+    
+    layer_conv_2d(filter = 32 , kernel_size = c(3,3),activation = 'relu',input_shape = c(img_size,img_channels)) %>%
+    
+    #Add a max pooling layer with 2x2 windows. This will halve the dimension of data.
+    layer_max_pooling_2d(pool_size = c(2,2)) %>%
+    
+    layer_dropout(rate = drop_rate)%>%
+    
+    layer_conv_2d(filter = 64 , kernel_size = c(3,3),activation = 'relu',kernel_regularizer =  regularizer_l2(l =  L2_rate)) %>%
+    
+    #Add a max pooling layer with 2x2 windows. This will halve the dimension of data.
+    layer_max_pooling_2d(pool_size = c(2,2)) %>%
+    
+    #Squash the output of the final max pooling layer into a 1D vector
+    layer_flatten()%>%
+    
+    #add a dropout layer here
+    layer_dropout(rate = drop_rate)%>%
+    
+    #Use this 1D vector as input to a single dense layer with 256 neurons
+    #add L2 regularization
+    layer_dense(units = 256,activation = 'relu',kernel_regularizer =  regularizer_l2(l =  L2_rate)) %>%
+    
+    #Finally, add a 10 neuron dense layer with a softmax activation function
+    layer_dense(units = n_classes,activation = 'softmax')
+  
+    #Print out a model summary  
+    summary(model)     
+    
+    return(model)
+    
+}
+
+```
+
+
+
+
+#### Train the model
+
+Hint: reshape your inputs so that they match the desired dimension of the input_shape in `layer_conv_2d`. Use callbacks for early stopping and model checkpoint (look at the baseline model).
+
+```{r}
+compile_and_train = function(cnn_model, learning_rate, max_epochs){
+  
+  cnn_model %>% compile(
+    loss = 'categorical_crossentropy',
+    optimizer = optimizer_adam(lr = learning_rate),
+    metrics = c('accuracy')
+  )
+  dir.create(file.path('saved_models'))
+  save_cnn = file.path('saved_models','cnn_models.h5') 
+  
+  callbacks_cnn = list(
+    callback_reduce_lr_on_plateau(monitor = "val_loss",patience = 3 ,factor = 0.1),
+    callback_early_stopping(monitor='val_loss',patience = 5,mode = 'min'),
+    callback_model_checkpoint(save_cnn,monitor='val_loss',save_best_only = T,mode = 'min'))
+  
+  history_cnn = fit(
+    cnn_model,x_train_reshape, y_train, epochs = max_epochs, batch_size = 128,
+    validation_data = list(x_val_reshape,y_val),callbacks = callbacks_cnn)
+  
+  return (history_cnn)
+  
+}
+
+# reshape input x
+x_train_reshape <- array_reshape(x_train,dim = c(-1,img_size,img_channels))
+x_val_reshape <- array_reshape(x_val,dim = c(-1,img_size,img_channels))
+dim(x_train_reshape)
+# compile and train the model
+model_dropout = build_model(0, 0.5)
+```
+
+```{r eval=F}
+
+history_dropout = compile_and_train(model_dropout, 1e-3, 100)
+
+```
+
+
+
+
+#### Load the saved model, evaluate performance on validation and test set
+
+```{r}
+save_cnn = file.path('saved_models','cnn_models.h5')
+model_dropout = load_model_hdf5(save_cnn)
+
+# evalute accuracy
+# reshape the test input x 
+x_test_reshape <- array_reshape(x_test,dim = c(-1,img_size,img_channels))
+
+val_acc = evaluate(model_dropout,x_val_reshape,y_val)$acc
+test_acc = evaluate(model_dropout,x_test_reshape,y_test)$acc
+
+cat('Validation Accuracy: ',val_acc,'\n')
+cat('Test Accuracy: ',test_acc,'\n')
+
+```
+
+
+#### Print summary of both models and comment on the number of parameters
+
+```{r}
+summary(model_ffnn)
+summary(model_dropout)
+
+```
+
+Comment on the number of parameters: From the summary of both models, the baseline model has a total of 1,494,154 parameters and my CNN model has a total of 431,242 parameters, which is only 29% of previous one. This means that the computation load and memory requirement are both lower than the baseline model. My CNN model, however, performs better on prediction of digits on validation set and test set. Their accuracy both exceeds 0.9934. 
+
+

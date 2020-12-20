@@ -1,0 +1,147 @@
+---
+title: 'Exercise 03: Data for Environmental Sciences'
+author: "Chenwei Xiao"
+date: "10/04/2020"
+output: html_document
+---
+
+## Using Spatial Data 
+
+### Part 1: Plotting Elevation differences
+
+In this first part of the exercise, we consider elevation data from the ETOPO dataset. ETOPO is a 1 arc-minute(0.016 degree) global relief model of the Earth's surface that integrates land topography and ocean bathymetry. Since it is modelled date there is a certain level of uncertainty associated with it. In this exercise, you will look at the differences between the elevations from the tower data, which is directly measured at the site, and the values you will extract from this modelled ETOPO data.
+
+_Note:_ think about which packages you need to load to complete each of the tasks.
+
+a. Load the _'dataset_ex3.csv'_ file containing the elevations of the towers.
+```{r}
+# enter your solution here
+library(tidyverse)
+
+ele_towers <- read_csv("../../data/data_exercise_03/dataset_ex3.csv")
+colnames(ele_towers)[1] <- 'ID'
+ele_towers %>% head()
+```
+
+b. Load both the _'ETOPO.tif'_ raster and the _'europe_shape'_ shapefile. Plot the shape of Europe over the raster. 
+(Since we used the shapefile in the tutorial too, it isn't located in the same folder as the data for this exercise. You'll have to use the correct pathway to load it, if you are unsure about how to find this use the 'Files' tab on the right can help you figure it out.)
+```{r}
+# enter your solution here
+library(raster)
+library(rasterVis)
+library(sf)
+library(spData)
+library(sp)
+library(rgdal)
+
+raster_ETOPO <- raster("../../data/data_exercise_03/ETOPO.tif")
+europe_shape <- readOGR(dsn="../../data/shapefiles", layer="europe_map")
+
+projection(raster_ETOPO) <- europe_shape@proj4string
+plot(raster_ETOPO,xlab="longitude", ylab="latitude");plot(europe_shape, add=TRUE)
+```
+
+c. Extract the elevations from the raster at the tower sites.
+```{r}
+# enter your solution here
+## generate the sp locations of towers
+sp_sites <- SpatialPoints(dplyr::select(ele_towers, longitude, latitude))
+## extract from the raster and join into original tower data
+ele_towers_joined <- extract(raster_ETOPO, sp_sites, sp = TRUE) %>% 
+  as_tibble() %>% 
+  right_join(ele_towers, by = c("longitude", "latitude")) %>% 
+  dplyr::rename(ele_ETOPO = ETOPO)
+## new joined data
+ele_towers_joined %>% head()
+```
+
+d. Calculate the difference between the elevations of the towers and the one extracted from the ETOPO.
+```{r}
+# enter your solution here
+library(Metrics)
+## use the MSE to measure the difference
+cat("The MSE of two elevations is", mse(ele_towers_joined$ele_ETOPO, ele_towers_joined$elevation))
+```
+
+e. Plot the difference in elevation calculated for each site on a map of Europe.
+_Hint:_ there are several ways to do this, one could be to using ifelse().
+```{r}
+# enter your solution here
+ele_towers_joined<-ele_towers_joined %>%
+  mutate(ele_diff = elevation - ele_ETOPO)
+
+## plot the difference so that if ele_diff > 0, then the symbol is upper red, or down blue.
+cols_ele_diff <- ifelse(ele_towers_joined$ele_diff > 0,"red","blue")
+pch_ele_diff <- ifelse(ele_towers_joined$ele_diff > 0, 24 , 25)
+
+ggplot() +
+  geom_polygon(data = europe_shape, aes(x = long, y = lat, group = group), fill=NA, colour = "black") +
+  geom_point(data = ele_towers_joined, aes(x = longitude, y = latitude),color=cols_ele_diff, pch = pch_ele_diff, size=2) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_classic()+ 
+  coord_quickmap()
+```
+
+
+## Part 2: Temperature and Elevation Correlations
+
+In this second part, we want to find out which of the elevations we gathered in the first part (ETOPO and towers) correlates better with the temperatures measured at the towers.
+
+a. Correlate the ETOPO elevations at the towers sites with the temperatures measured at the towers. 
+```{r}
+# enter your solution here
+## do the pearson correlation test
+cor.test(ele_towers_joined$ele_ETOPO, ele_towers_joined$temperature)
+
+## do the linear regression
+reg1 <- lm(temperature ~ ele_ETOPO, data = ele_towers_joined)
+summary(reg1)
+
+## plot the relationship
+ele_towers_joined %>% 
+  ggplot(aes(x = ele_ETOPO, y = temperature)) +
+  geom_point() +
+  geom_smooth(method='lm', color="red", size=0.5, se=FALSE) +
+  xlab("ETOPO elevation [m]") +
+  ylab("Temperature [degree celcius]") +
+  theme_classic()
+```
+
+b. Correlate the elevations measured at the tower sites with the temperatures measured at the towers.
+```{r}
+# enter your solution here
+## do the same operation as above for elevation at towers
+## do the pearson correlation test
+cor.test(ele_towers_joined$elevation, ele_towers_joined$temperature)
+
+## do the linear regression
+reg2 <- lm(temperature ~ elevation, data = ele_towers_joined)
+summary(reg2)
+
+## plot the relationship
+ele_towers_joined %>% 
+  ggplot(aes(x = elevation, y = temperature)) +
+  geom_point() +
+  geom_smooth(method='lm', color="red", size=0.5, se=FALSE) +
+  xlab("Tower elevation [m]") +
+  ylab("Temperature [degree celcius]") +
+  theme_classic()
+```
+
+c. What is the mean squared errors of the two models above. Which of the two correlates better?
+```{r}
+# enter your solution here
+mse1 <- mean(reg1$residuals^2)
+mse2 <- mean(reg2$residuals^2)
+cat("MSE of the first model is",mse1,'and','MSE of the second model is',mse2)
+```
+
+d. The _'lapse rate'_ is known as the rate of decrease of an atmospheric variable, in our case temperature, with increased elevation (also altitude). This _lapse_ (gradual fall)  in temperature with increasing altitude at a given time and place, is the slope of your models above. Find and compare the _lapse rate_ of the two models. _Hint:_ if you are stuck take a closer look at your model with summary().
+```{r}
+# enter your solution here
+lapse_rate1 <- reg1$coefficients[2]
+lapse_rate2 <- reg2$coefficients[2]
+cat("Lapse rate of the first model is",lapse_rate1*100,'K/100m','and','lapse rate of the second model is',lapse_rate2*100,'K/100m.')
+```
+
+Now, that you've made it to the end of the exercise, remember to 'knit' this document so you can upload the html to moodle.

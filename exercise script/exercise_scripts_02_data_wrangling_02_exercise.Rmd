@@ -1,0 +1,161 @@
+---
+title: "Exercise Chapter 2"
+author of introduction: Benjamin Stocker
+date: "9/24/2020"
+output:
+  pdf_document: default
+  html_document: default
+author of actual exercise: Chenwei Xiao
+---
+
+## What is this file here?
+
+This is a RMarkdown file. It allows you to combine normal text with executable code - much like a Jupyter Notebook. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r}
+summary(cars)
+```
+
+You can also embed plots, for example:
+```{r}
+hist(rnorm(1000))
+```
+
+You can also run individual cells by putting the cursor into it and doing command + enter, or in RStudio by clicking the green "play" icon in the top-right corner of the cell. You can also run all cells of the RMarkdown file sequentially by clicking on "Run" in the top right corner of this window. This embeds all output of the cells (be it a plot or text returned to the R console).
+
+## Actual exercises
+
+### 1. Outlier removal
+
+a. Based on the half-hourly dataset for site CH-Lae, aggregated to daily means, **identify outliers** in `GPP_NT_VUT_REF` with respect to the linear relationship between `GPP_NT_VUT_REF` and `PPFD_IN`. To do so, first think about whether your data is ready to use. Then fit a linear regression model using `lm()`. This function returns a list of objects, one of which is `residuals`. Determine outliers as the "outlying" points in the distribution of residuals. See the definition of the boxplot in the bonus tutorial section of Chapter 2 and/or find the relevant information you need. You may use the base-R function `boxplot.stats()` and set the argument `coef` accordingly to our customised threshold definition.
+```{r}
+# enter your solution here
+## load library required
+library(tidyverse)
+library(lubridate)
+
+## load post-processed data in the tutorial
+load("~/02_data_wrangling/data/FLX_CH-Lae_FLUXNET2015_FULLSET_HH_2004-2014_1-3_CLEAN.RData")
+
+## view the dataset
+head(hhdf)
+names(hhdf)
+summary(hhdf)
+
+## aggregated to daily means and only keep the GPP and PPFD_IN that we are interested
+ddf <- hhdf %>% 
+  mutate(date = as_date(TIMESTAMP_START)) %>%  # converts the ymd_hm-formatted date-time object to a date-only object (ymd)
+  group_by(date) %>%
+  summarise(GPP_NT_VUT_REF = mean(GPP_NT_VUT_REF, na.rm = TRUE),
+            PPFD_IN = mean(PPFD_IN, na.rm = TRUE)
+            )
+head(ddf)
+nrow(ddf)
+summary(ddf)
+## do the linear regression for GPP_NT_VUT_REF with respect to PPFD_IN
+GPP_lm <- lm(GPP_NT_VUT_REF~PPFD_IN, data = ddf)
+GPP_lm_res <- GPP_lm$residuals
+summary(GPP_lm_res)
+
+## boxplot the residual to find outliers
+boxplot(GPP_lm_res)
+box_coef <- 1.5
+GPP_lm_res_boxstat <- boxplot.stats(GPP_lm_res, coef = box_coef, do.conf = F, do.out = T)
+cat('ratio of outliers: ',length(GPP_lm_res_boxstat$out)/GPP_lm_res_boxstat$n, 'under coef = ',box_coef)
+cat('range of remaining data: ', GPP_lm_res_boxstat$stats[1], 'to ',GPP_lm_res_boxstat$stats[5])
+
+GPP_lm$residuals[1:10]
+GPP_lm$fitted.values[1:10]
+ddf$GPP_NT_VUT_REF %>% length()
+GPP_lm$fitted.values %>% length()
+
+## find out the outlier positions
+Outliers_position <- GPP_lm_res_boxstat$out %>% names() %>% as.numeric()
+
+## Just to confirm outlier position is correct
+(ddf[Outliers_position,]$GPP_NT_VUT_REF[1] - GPP_lm$fitted.values[1] + GPP_lm$residuals[1]) < 1e-5
+
+```
+
+b. **Remove outliers** by setting values in the data frame (aggregated daily data frame for CH-Lae) to `NA`.
+
+In base-R, this could be done (admittedly quite simply) as:
+```{r}
+# enter your solution here
+## The position need to be removed
+ddf_1 <- ddf
+ddf_1$outlier_flag <- 0
+ddf_1$outlier_flag[Outliers_position] <- 1
+ddf_1$GPP_NT_VUT_REF[Outliers_position] <- NA
+ddf_1$PPFD_IN[Outliers_position] <- NA
+head(ddf_1[Outliers_position,])
+```
+
+With dplyr:
+```{r}
+# enter your solution here
+ddf_2 <- ddf %>% mutate(outlier_flag = 0)
+ddf_2$outlier_flag[Outliers_position] <- 1
+ddf_2 %>% filter(outlier_flag == 1) %>% head()
+
+ddf_3 <- ddf_2 %>%
+  mutate(GPP_NT_VUT_REF = ifelse(outlier_flag == 0, GPP_NT_VUT_REF, NA),
+         PPFD_IN = ifelse(outlier_flag == 0, PPFD_IN, NA))
+
+head(ddf_3[Outliers_position,])
+```
+
+c. Create a scatterplot of all daily data (GPP vs. PPFD) and highlight outliers that are removed by step b.
+```{r}
+# enter your solution here
+## use ddf_2 to do the plotting here
+ddf_2 %>% ggplot(aes(x=PPFD_IN,y=GPP_NT_VUT_REF,color=factor(outlier_flag))) +
+  geom_point()+
+  labs(x = expression(paste("PPFD (", mu, "mol m"^-2, "s"^-1, ")")), y = expression(paste("GPP (gC m"^-2, "s"^-1, ")")) ) +
+  ylim(-10, 25)
+
+```
+
+### 2. Visualising diurnal and seasonal cycles
+
+Using the half-hourly dataset for site CH-Lae, visualise how GPP (`GPP_NT_VUT_REF`) varies on two time scales: diurnal (within-day at hourly time scale) and seasonal. To implement this, follow the following steps:
+
+a. Summarise half-hourly data for each data across multiple years to get a mean seasonality with a mean diurnal cycle for each day of the year. You will use functions from the lubridate package (e.g., `yday()`). To deal with date-time objects, use the lubridate package. Enter `?day` to get more hints.
+```{r}
+# enter your solution here
+## load library required
+library(tidyverse)
+library(lubridate)
+
+## load post-processed data in the tutorial
+load("~/02_data_wrangling/data/FLX_CH-Lae_FLUXNET2015_FULLSET_HH_2004-2014_1-3_CLEAN.RData")
+
+## view the dataset
+head(hhdf)
+names(hhdf)
+summary(hhdf)
+
+yday_hour_df <- hhdf %>% 
+  mutate(day = yday(TIMESTAMP_START), hour = hour(TIMESTAMP_START)) %>%  # converts the ymd_hm-formatted to yday and day hour
+  group_by(day, hour) %>%
+  summarise(GPP_NT_VUT_REF = mean(GPP_NT_VUT_REF, na.rm = TRUE)
+            )
+
+```
+
+b. Create a raster plot (`geom_raster()`), mapping the hour of the day to the x-axis, the day of the year to the y-axis, and the magnitude of `GPP_NT_VUT_REF` to color (fill).
+```{r}
+# enter your solution here
+gg <- yday_hour_df %>% ggplot(aes(x = hour, y = day)) + 
+  geom_raster(aes(fill = GPP_NT_VUT_REF))
+print(gg)
+```
+
+c. Make this figure ready for publication by adding nice labels and choosing a good color scale.
+```{r}
+# enter your solution here
+gg + labs(x = 'Hour of the day', y = 'Day of the year', fill = expression(paste("GPP (gC m"^-2, "s"^-1, ")"))) +
+  scale_fill_gradientn(colours = rev(terrain.colors(10)))
+  
+```

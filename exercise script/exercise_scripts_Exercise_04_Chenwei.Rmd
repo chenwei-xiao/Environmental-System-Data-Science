@@ -1,0 +1,182 @@
+---
+title: 'Exercise 04: Data Scraping'
+author: "Chenwei Xiao"
+date: "10/07/2020"
+output: html_document
+---
+
+This exercise is about getting the data from the web. Once you have finished the exercise please 'knit' this document to create an .html file, export it and upload it to moodle. 
+
+## Part 1: Get the data
+
+a. Following the steps described in the tutorial, get the maximal length of the species *Salvelinus alpinus* and the *Salmo trutta* using an API. After fetching the values create a table to store these values in one dataframe. 
+
+```{r}
+# enter your solution here
+## load required libraries
+lib_vec <- c("RCurl", "XML", "raster", "rgdal", "rfishbase", "tidyverse", "sf")
+sapply(lib_vec, library, character.only = TRUE)
+
+## using api to load data and its length
+
+suppressWarnings(suppressMessages(
+data_SA<- species("Salvelinus alpinus",fields=c("Length"))
+))
+suppressWarnings(suppressMessages(
+data_ST<- species("Salmo trutta",fields=c("Length"))
+))
+
+data_len <- tribble(
+  ~species, ~maximal_length,
+  "Salvelinus alpinus", data_SA$Length,
+  "Salmo trutta", data_ST$Length
+  )
+
+data_len
+
+
+```
+
+b. Get the **IUCN Status** and **eggs shape** for *Salvelinus alpinus* and *Salmo trutta* using web scraping. Again follow the same steps you learned in the tutorial. In the end, add the new information to the dataframe.
+
+```{r}
+# enter your solution here
+## to get the IUCN status
+SA <- "Salvelinus-alpinus"
+ST <- "Salmo-trutta"
+
+i <- 0
+for (x in c(SA,ST)) {
+  i <- i + 1
+  url1 <- paste("http://www.fishbase.de/summary/",x,".html",sep="")                 # we call the url
+  fish_species <- htmlParse(getURLContent(url1, followlocation=TRUE))              # get the content
+  fish_species_div <-getNodeSet(fish_species, "//div ")                            # get the node with the fish species (the nodeSet gets all the values inside the //div tag)
+  w_IUCN  <-which(sapply(lapply(fish_species_div,xmlValue),function(x)            # look for the IUCN content
+    {regexec(pattern="IUCN", x)[[1]][1]})>0)
+  if(length(w_IUCN)==0){                                                        # here we assign NA if the fileds are empty
+    IUCN_status="NA"
+  } else {                                                                     # else we read the information and iterate over the fields
+    d1_IUCN  <- xmlValue(fish_species_div[[w_IUCN[length(w_IUCN)]]])
+    IUCN <- unlist(regmatches(d1_IUCN,gregexpr(pattern= "[[:alpha:]]+)",     
+    d1_IUCN)))
+    IUCN_status <- sub(pattern="[[:punct:]]",replacement="",IUCN[1] ) 
+  } 
+  print(IUCN_status)
+  data_len$IUCN[i] <- IUCN_status # make a new column in 'data_len' containing the IUCN status
+}
+
+data_len
+
+## get the eggs shape data
+i <- 0
+for(x in c(SA,ST)){
+  i <- i + 1
+  url2 <- paste("http://www.fishbase.de/summary/",x,".html",sep="")
+  fishbase <- htmlParse(getURLContent(url2, followlocation=TRUE))
+  link_list <- getHTMLLinks(fishbase, externalOnly = TRUE, xpQuery = "//a/@href"
+  , baseURL = docName(fishbase))
+  eggs_link <- link_list[grep("FishEggInfoSummary",link_list)]
+  eggs_link <- unique(eggs_link)
+  eggs_link <- str_replace(eggs_link, "..", "" )
+  url_egg <- paste ("http://www.fishbase.org/",eggs_link,sep="")
+  egg_content <- getURLContent(url_egg, followlocation=TRUE, .encoding="CE_UTF8")
+  egg_table <- readHTMLTable(egg_content,header=TRUE,colClasses=NULL,skip.rows=integer(),
+                         stringsAsFactors=FALSE,trim=TRUE,elFun=xmlValue,
+                         as.data.frame=TRUE,which=integer())[[1]]
+  egg_shape = egg_table[which(egg_table[,1] == "Shape of Egg"),2] # Shape of Egg
+  
+  if(egg_shape == "") {egg_shape = "NA"}
+  
+  data_len$egg_shape[i] <- egg_shape
+  
+}
+
+data_len
+```
+
+
+## Part 2: Get all the species in a family and the IUCN status
+
+a. Your next task is to get all the species in the family _'Neoscopelidae'_ and print the first 5 elements of the family.
+
+```{r}
+# enter your solution here
+NE <- "Neoscopelidae"
+url3<-paste("http://www.fishbase.org/Nomenclature/FamilySearchList.php?Family=", NE,sep="")
+Content_Neo <- getURLContent(url3, followlocation=TRUE)
+z <- data.frame(readHTMLTable(Content_Neo))
+Sp_Neo <- as.character(z[,1])
+Sp_Neo <- str_replace(Sp_Neo, " ", "-")
+
+Sp_Neo[1:5]
+```
+
+b. Extract the 'Native Exotic Status' of all the species from France. Then end get the unique values of the Native Exotic Status. For this task you will need to use the csv file _'dataset2'_.
+
+```{r}
+# enter your solution here
+
+suppressWarnings(suppressMessages(
+dataset <- read_csv("../../data/dataset2.csv")))
+subset <- dataset[grep("France", dataset$Country),]
+subset
+
+Native_Exotic_Status_France <- unique(subset$X3.Native.Exotic.Status)
+Native_Exotic_Status_France
+
+```
+
+c. Now, use the information you got above to plot the proportion of species in each Native Exotic Status category for France.
+
+```{r}
+# enter your solution here
+number_na <- length(which(subset$X3.Native.Exotic.Status == Native_Exotic_Status_France[1]))
+number_ex <- length(which(subset$X3.Native.Exotic.Status == Native_Exotic_Status_France[2]))
+
+# print the values for LC, using 'paste0()'' to help visualise the results.
+paste0(Native_Exotic_Status_France[1], ": ", number_na)
+
+# print the values for NT
+paste0(Native_Exotic_Status_France[2], ": ", number_ex)
+
+slices <- c(number_na, number_ex)
+lbls <- Native_Exotic_Status_France
+pie(slices, labels = lbls,font.main = 1, 
+main = "Proportion of Species per Native Exotic Status in France", col=c("red", "yellow"))
+
+
+```
+
+
+## Part 3: Extract the temperature of the species  
+
+Extract the mean temperature for **Coregonus lavaretus** and **Salvelinus alpinus** using the function `stocks()` from `rfishbase` package and store the values in a new dataframe.
+
+```{r}
+# enter your solution here
+temp_CL <- stocks("Coregonus lavaretus")
+temp_SA <- stocks("Salvelinus alpinus")
+
+data_temp <- tribble(
+  ~Species, ~Min_Temp, ~Max_Temp,
+  "Coregonus lavaretus", temp_CL$TempMin, temp_CL$TempMax,
+  "Salvelinus alpinus", temp_SA$TempMin, temp_SA$TempMax
+)
+
+data_temp <- data_temp %>% mutate(Mean_Temp = .5*(Min_Temp+Max_Temp))
+
+data_temp
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,469 @@
+---
+title: "Exercise 10"
+author: "Chenwei Xiao"
+date: 2020/11/18
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+For this exercise your task is to create 3 neural network models and to compare their performance. The provided data contains 2 classes (0 and 1). Our aim is to compare those models using the majority of the metrics we have seen in tutorial 10.
+
+Tasks:
+
+  1. Read in the data.
+  2. Visualize the data and print the proportion of data belonging to each class.
+  3. Split into training and test set using Stratified split.
+  4. Create 3 different neural network models of your taste ranging from a simple to a very complex one.
+  5. For each model calculate accuracy, presicion, recall and f-score on the test data.
+  6. For each model plot the desicions on the test data.
+  7. For the best performing model make the ROC curve and calculate the corresponding AUC.
+  8. Train the best performing model 5 times. For each time calculate the probability output on the test data. Average the probabilities over the 5 models and then make decisions. Print accuracy, presicion, recall and f-score on the test data.
+  
+The required libraries and some useful functions are already imported in the following chunks. For the ROC curve you can also use the `pROC` package.
+
+### Import libraries
+```{r}
+library(tidyverse)
+library(gridExtra)
+library(reticulate)
+library(pROC)
+use_condaenv()
+library(keras)
+library(rsample)
+
+options(repr.plot.width = 10, repr.plot.height = 7)
+```
+
+### Import functions
+```{r}
+
+#Area Under Curve
+simple_auc <- function(x, y){
+  #Revert order
+  x = rev(x)
+  y = rev(y)  
+  #Define rectangles, calculate area and add those
+  dx <- c(diff(x), 0)
+  dy <- c(diff(y), 0)
+  sum(y * dx) + sum(dy * dx)/2
+}
+
+#ROC CURVE
+ROC = function(fpr, recall, viz = T){
+     
+    #Calculate the area under the ROC
+    auc = simple_auc(fpr,recall)
+     
+    #Visualize the ROC
+    if (viz){
+        
+        x = seq(0,1,length.out = 100)
+        g = ggplot() +
+        geom_line(aes(x = fpr, y = recall,color='Model') , lty =2,lwd = 1.2)+
+        geom_line(aes(x=x,y=x,color = 'Baseline'),inherit.aes = F,lty=2,alpha=0.8)+
+        labs(x = 'False Positive Rate',
+             y = 'Recall',
+             color='',
+             title='Area Under The curve ROC',
+            subtitle=paste("AUC : ",round(auc,2)))+
+        theme_grey(base_size = 20)
+    }
+    else{
+        g = NA
+    }
+    
+    return (list(plot = g,value = auc))
+}
+
+confusion = function(y_true, pred_out, threshold = 0.5, verbose = T){
+  
+  true_positives = sum((pred_out >= threshold) & (y_true == 1))
+  true_negatives = sum((pred_out < threshold) & (y_true == 0))
+  false_positives = sum((pred_out >= threshold) & (y_true == 0))
+  false_negatives = sum((pred_out < threshold) & (y_true == 1))
+  
+  if (verbose) {
+    cat('true positives: ',true_positives,'\n')
+    cat('true negatives: ',true_negatives,'\n')
+    cat('false positives: ',false_positives,'\n')
+    cat('false negatives: ',false_negatives,'\n')
+  }
+  return (list(tp = true_positives, tn = true_negatives, fp = false_positives, fn = false_negatives))
+}
+
+precision_and_recall = function(true_positives, true_negatives,false_positives, false_negatives, verbose=T){
+  
+  #Protect against division by zero
+  if ((true_positives + false_positives) > 0){
+    precision = true_positives /(true_positives + false_positives)
+  }
+  else{
+    precision = 1
+  }
+  
+  if ((true_positives + false_negatives) > 0){    
+    recall = true_positives / (true_positives + false_negatives)
+  }
+  else{
+      recall = 0
+  }
+  
+  if (verbose){
+    cat("Precision: " ,precision,"\n")
+    cat("Recall: ",recall,"\n")
+  }
+  
+  return (list(precision = precision, recall = recall))
+}
+
+f_score = function(precision,recall,verbose=T){
+    
+    #Calculate F
+    f = 2*precision*recall/(precision+recall)
+    
+    #If the user has requested verbose output, provide it
+    if(verbose){
+        cat("F-score: ",f,"\n")
+    }
+    
+    #Return F
+    return(f)
+}
+```
+
+IMPORTANT NOTE: READ CAREFULLY!
+
+Do not skip this part or you'll run into issues later on!
+In a moment, after you've read the following instructions carefully, you should:
+- run the code chunk immediately below this text (`keras_model_sequential()`). 
+- look down in the *Console* it asks if you want to install some packages: ("Would you like to install Miniconda? [Y/n]:"). 
+- write _n_ and press enter. You should see the following code in the console: `Would you like to install Miniconda? [Y/n]: n`. 
+Now, you can normally continue with the exercise.
+
+If you were too eager and already pressed _Y_ (yes) and enter, don't panic! Just close your environment, re-open it and make sure that next time you go with _n_ (no).
+
+```{r eval=F}
+keras_model_sequential()
+```
+
+
+
+
+### Read in the data
+```{r}
+df_data <- read_csv(file = '../../data/exercise/data.csv')
+
+df_data %>% head()
+
+```
+
+### Visualize data and print proportion of data belongs to each class.
+```{r}
+df_data %>% 
+    ggplot(aes(x = x1 , y = x2, color =as.factor(y)))+
+    geom_point()+
+    scale_color_manual(name = 'Class',values = c('0'="green",'1'='blue'))+
+    labs(linetype='')+
+    theme_grey(base_size = 15)
+
+
+#print some summary statistics about these data
+cat('Proportion of data in class blue: ' , sum(df_data$y)/length(df_data$y),'\n')
+cat('Proportion of data in class green: ' , 1-sum(df_data$y)/length(df_data$y),'\n')
+
+```
+
+### Split into training and test set (Stratified split).
+```{r}
+# split with r sample and strata = y
+split = initial_split(df_data, prop = 0.8, strata = 'y')
+
+#train set
+df_train = training(split)
+
+#test set
+df_test = testing(split)
+
+#print statistics for each set
+## training set
+cat("Training set \n")
+cat('Proportion of data in class blue: ' , sum(df_train$y)/length(df_train$y),'\n')
+cat('Proportion of data in class green: ' , 1-sum(df_train$y)/length(df_train$y),'\n')
+
+##test set
+cat("\nTest set \n")
+cat('Proportion of data in class blue: ' , sum(df_test$y)/length(df_test$y),'\n')
+cat('Proportion of data in class green: ' , 1-sum(df_test$y)/length(df_test$y),'\n')
+
+```
+
+
+### Create models
+```{r}
+#Learning rate
+lr = 0.01
+#Number of epochs
+ne = 100
+#Batch size
+bs = 512
+
+## functions for build and train NN
+build_and_train_model = function (data = df_train,
+                                  learning_rate = lr, 
+                                  num_epochs = ne, 
+                                  batch_size = bs, 
+                                  num_layers, 
+                                  num_units_per_layer,
+                                  print_model_summary = F
+                                 ){
+    
+    #Most models are so-called 'sequential' models
+    model = keras_model_sequential()
+    
+    #Keras makes building neural networks as simple as adding layer upon layer with simple sequential 
+    #calls to the function "layer_dense". Take a moment to appreciate how easy that makes things.
+    
+    #The input layer is the only layer that requires the user to specify its shape. The shape of all
+    #subsequent layers is automatically determined based on the output of the preceding layer. Let's
+    #use a ReLU activation function in each node in the input and hidden layers.
+    model = model %>% layer_dense(units=num_units_per_layer, input_shape=(ncol(data)-1), activation="relu")
+    
+    #Add the hidden layers. Note this requires just a simple for loop that calls the function "layer_dense"
+    #again and again.
+    if (num_layers>1){
+        for (i in 1:(num_layers-1)){
+            model = model %>% layer_dense(units=num_units_per_layer, activation="relu")
+        }
+    }
+    
+    #Add the output layer. Note that it uses a sigmoid activation function. Make sure you know why.
+    model = model %>% layer_dense(units=1, activation="sigmoid")    
+    
+    #Print the model description
+    if (print_model_summary){
+    
+        summary(model)        
+    }
+         
+    #Specify the learning rate for stochastic gradient descent
+    opt = optimizer_adam(lr = learning_rate)
+
+    #Compile the model, using binary cross-entropy to define loss. Measure accuracy during training.
+    #Note how easy Keras makes this. Did you have to write any functions for loss or for measuring model
+    #performance during training? No, Keras takes care of all of this for you.
+    model %>% compile(optimizer=opt, loss='binary_crossentropy', metrics= list('accuracy'))         
+
+    #Fit the model
+    history = model %>% fit(x = as.matrix(data[,c('x1','x2')]),
+                            y = data$y,
+                            epochs=num_epochs,
+                            batch_size=batch_size,
+                            )
+
+    #Return the model and the training history
+    return(list(model = model, history = history))                                      
+}
+
+## Build simplest model with 1 hidden layer of 2 nodes
+
+c(model1,history1) %<-% build_and_train_model(data = df_train,
+                                            learning_rate = 0.01,
+                                            batch_size = 512,
+                                            num_epochs = 100,
+                                            num_layers = 1,
+                                            num_units_per_layer =  2,
+                                            print_model_summary = T)
+
+cat('Final training accuracy: ', round(history1$metrics$acc[ne],3),'\n')
+
+## Build second model with 3 hidden layer of 5 nodes
+
+c(model2,history2) %<-% build_and_train_model(data = df_train,
+                                            learning_rate = 0.01,
+                                            batch_size = 512,
+                                            num_epochs = 100,
+                                            num_layers = 3,
+                                            num_units_per_layer =  5,
+                                            print_model_summary = T)
+
+cat('Final training accuracy: ', round(history2$metrics$acc[ne],3),'\n')
+
+## Build second model with 5 hidden layer of 8 nodes
+
+c(model3,history3) %<-% build_and_train_model(data = df_train,
+                                            learning_rate = 0.01,
+                                            batch_size = 512,
+                                            num_epochs = 200,
+                                            num_layers = 8,
+                                            num_units_per_layer =  10,
+                                            print_model_summary = T)
+
+cat('Final training accuracy: ', round(history3$metrics$acc[ne],3),'\n')
+```
+
+
+### Calculate output and make decisions for each model on test set.
+```{r}
+#predict on test data
+pred1 = predict(model1,as.matrix(df_test[,c('x1','x2')]))
+pred2 = predict(model2,as.matrix(df_test[,c('x1','x2')]))
+pred3 = predict(model3,as.matrix(df_test[,c('x1','x2')]))
+
+#set the classification threshold
+threshold = 0.5
+
+#make predictions
+y_pred1 = (pred1 >= threshold)*1
+y_pred2 = (pred2 >= threshold)*1
+y_pred3 = (pred3 >= threshold)*1
+
+```
+
+
+### Visualize test predictions for each model.
+```{r}
+#plot our predictions
+
+p1 <- df_test %>%
+        ggplot(aes(x = x1, y = x2))+
+        geom_point(color = ifelse(y_pred1==1,'blue','red')) +
+        ggtitle("Simplest Model (1 layer of 2 nodes)")
+
+p2 <- df_test %>%
+        ggplot(aes(x = x1, y = x2))+
+        geom_point(color = ifelse(y_pred2==1,'blue','red')) +
+        ggtitle("Second complex Model (3 layers of 5 nodes)")
+
+p3 <- df_test %>%
+        ggplot(aes(x = x1, y = x2))+
+        geom_point(color = ifelse(y_pred3==1,'blue','red')) +
+        ggtitle("Most complex Model (8 layers of 10 nodes)")
+
+grid.arrange(p1, p2, p3, nrow = 1)
+```
+
+
+### Calculate metrics for each model on test set.
+
+```{r}
+#evaluate model performance on test data
+c(loss1,acc1) %<-% evaluate(model1,as.matrix(df_test[,c('x1','x2')]),df_test$y)
+c(loss2,acc2) %<-% evaluate(model2,as.matrix(df_test[,c('x1','x2')]),df_test$y)
+c(loss3,acc3) %<-% evaluate(model3,as.matrix(df_test[,c('x1','x2')]),df_test$y)
+cat('Accuracy of the simplest model on held-out test data: ' , round(acc1,3),'\n')
+cat('Accuracy of the second complex model on held-out test data: ' , round(acc2,3),'\n')
+cat('Accuracy of the most complex model on held-out test data: ' , round(acc3,3),'\n')
+
+
+#print precision,recall and F-score
+c(true_positives, true_negatives,false_positives, false_negatives) %<-% confusion(df_test$y, pred1, threshold,verbose = F)
+c(precision1, recall1) %<-% precision_and_recall(true_positives, true_negatives,false_positives, false_negatives)
+f1 = f_score(precision1,recall1)
+
+c(true_positives, true_negatives,false_positives, false_negatives) %<-% confusion(df_test$y, pred2, threshold,verbose = F)
+c(precision2, recall2) %<-% precision_and_recall(true_positives, true_negatives,false_positives, false_negatives)
+f2 = f_score(precision2,recall2)
+
+
+c(true_positives, true_negatives,false_positives, false_negatives) %<-% confusion(df_test$y, pred3, threshold,verbose = F)
+c(precision3, recall3) %<-% precision_and_recall(true_positives, true_negatives,false_positives, false_negatives)
+f3 = f_score(precision3,recall3)
+
+## construct a metrix to store metrics
+df_metrics <- data.frame(Model = c(1,2,3), Accuracy = c(acc1,acc2,acc3), 
+                         Precision = c(precision1,precision2,precision3),
+                         Recall = c(recall1,recall2,recall3),
+                         F_score = c(f1,f2,f3))
+df_metrics # the best model is the most complex one
+```
+
+### Calculate ROC and AUC for the best model.
+```{r}
+#Consider 100 thresholds between 0 and 1
+num_thresholds = 100
+thresholds = seq(0,1,length.out = num_thresholds)
+
+#Allocate space for the four metrics of the confusion matrix,
+#as well as for precision and recall
+fp = rep(NA,num_thresholds)
+fn = rep(NA,num_thresholds)
+tp = rep(NA,num_thresholds)
+tn = rep(NA,num_thresholds)
+precision = rep(NA,num_thresholds)
+recall = rep(NA,num_thresholds)
+
+#Loop over the thresholds, calculate the confusion matrix as well as precision and recall
+for (i in 1:num_thresholds){
+    
+    c(tp[i], tn[i],fp[i], fn[i]) %<-% confusion(df_test$y, pred3, thresholds[i],verbose = F)
+    c(precision[i], recall[i]) %<-% precision_and_recall(tp[i], tn[i],fp[i], fn[i],verbose = F)
+    }
+
+fpr = fp/(fp+tn)
+auc = ROC(fpr, recall, viz = T)
+cat('The AUC of the model3 with the best performance is:', round(auc$value,3))
+```
+
+### ROC Curve
+```{r}
+auc$plot
+```
+
+### Train 5 times the best model, take probability outputs on test set for each time. 
+
+```{r}
+num_initializations <- 5
+pred = array(NA,dim = c(nrow(df_test),num_initializations))
+
+for (k in 1:num_initializations){
+            
+        #Print some satisfying output    
+        message("You finish exercise quite fast today! Initialization " , as.character(k),'\n')
+    
+        #Build and train the model
+        c(model, history) %<-% build_and_train_model(num_layers = 8,
+                                                     num_units_per_layer = 10, 
+                                                     print_model_summary = F)
+        
+        #Predict on test data
+        pred[,k] = predict(model,as.matrix(df_test[,c('x1','x2')]))
+    
+    }
+
+```
+
+### Average over the models output and then make decisions. Print Metrics.
+```{r}
+head(pred)
+tail(pred)
+str(pred)
+# average over the models
+pred_average <- apply(pred,1,mean)
+str(pred_average)
+
+# make decisions and calculate metrics
+threshold <- 0.5
+y_pred_final = (pred_average >= threshold)*1
+
+# plot
+df_test %>%
+        ggplot(aes(x = x1, y = x2))+
+        geom_point(color = ifelse(y_pred_final==1,'blue','red')) +
+        ggtitle("Average prediction of 5 most complex Model (8 layers of 10 nodes)")
+
+# calculate metrics
+#Evaluate model performance on test data
+acc <- sum(y_pred_final == df_test$y)/nrow(df_test)
+cat('Accuracy of the final model on held-out test data: ' , round(acc,3),'\n')
+
+#Print precision,recall and F-score
+c(true_positives, true_negatives,false_positives, false_negatives) %<-% confusion(df_test$y, pred_average, threshold,verbose=F)
+c(precision, recall) %<-% precision_and_recall(true_positives, true_negatives,false_positives, false_negatives)
+f = f_score(precision,recall)
+
+```
+
+

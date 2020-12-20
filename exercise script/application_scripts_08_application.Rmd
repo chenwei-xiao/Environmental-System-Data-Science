@@ -1,0 +1,430 @@
+---
+title: "Application: Variable selection with stepwise regression"
+author: Chenwei Xiao
+date: 2020/11/5
+output:
+  html_document: default
+header-includes: \usepackage{xcolor} \usepackage{amsmath}
+---
+
+## Introduction
+
+In Chapter 7, we noted that the coefficient of determination $R^2$ may increase even when uninformative predictors are added to a model. This will ascribe some predictive power to an uninformative predictor that is in fact misguided by its (random) correlation with the target variable. Often, we start out formulating models, not knowing beforehand what predictors should be considered and we are tempted to use them all because the full model will always yield the best $R^2$. In such cases, we're prone to building overconfident models that perform well on the training set, but will not perform well when predicting to new data. 
+
+In this application session, we'll implement an algorithm that sequentially searches the best additional predictor to be included in our model, starting from a single one. This is called *stepwise-forward* regression (see definition below). There is also *stepwise-backward* regression where predictors are sequentially removed from a model that includes them all. The challenge is that we often lack the possibility to confidently assess generalisability. The effect of spuriously increasing $R^2$ by adding uninformative predictors can be mitigated, as we noted in Chapter 7, by considering alternative metrics that penalize the number of predictors in a model. They balance the tradeoff between model complexity (number of variables in the linear regression case) and goodness of fit. Such metrics include the *adjusted-*$R^2$,the Akaike Information Criterion (AIC), or the Bayesian Information Criterion (BIC). In cases, where sufficient data is available, also cross-validation can be used for assessing the generalisability of alternative models. Here, we'll assess how these different metrics behave for a sequence of linear regression models with an increasing number of predictors. You'll learn to write code that implements an algorithm determining the order in which variables enter the model, starting from one and going up to fourteen predictors. You'll write your own stepwise-forward regression code.
+
+Let's get started...
+
+***
+**Forward stepwise regression**
+
+1. Let $\mathcal{M_0}$ denote the null model, which contains no predictors.
+
+2. For $k=0,..,p-1$:
+  
+    (a) Consider all $p − k$ models that augment $\mathcal{M}_k$ with one additional predictor. 
+
+    (b) Choose the best model among these $p − k$ models, and call it $\mathcal{M}_{k+1}$. Here _best_ is defined as having the highest $R^2$ .
+
+3. Select a single best model from among $\mathcal{M}_0$, . . . , $\mathcal{M}_p$ using cross-validated prediction error, AIC, BIC, or adjusted $R^2$.
+
+***
+
+## Loading required libraries
+```{r}
+library(tidyverse)
+
+```
+
+## Warm-up 1: Nested for-loop
+
+Given a matrix A and a vector B (see below), do the following tasks:
+
+- Replace the missing values (`NA`) in the first row of A by the largest value of B. After using that element of B for imputing A, drop that element from the vector B and proceed with imputing the second row of A, using the (now) largest value of the updated vector B, and drop that element from B after using it for imputing A. Repeat the same procedure for all four rows in A.
+- After imputing (replacing) in each step, calculate the mean of the remaining values in B and record it as a single-row data frame with two columns `row_number` and `avg`, where `row_number` is the row number of A where the value was imputed, and `avg` is the mean of remaining values in B. As the algorithm proceeds through rows in A, sequentially bind the single-row data frame together so that after completion of the algorithm, the data frame contains four rows (corresponding to the number of rows in A).
+
+```{r}
+A <- matrix(c(6, 7, 3, NA, 15, 6, 7, 
+              8, 9, 12, 6, 11, NA, 3, 
+              9, 4, 7, 3, 21, NA, 6, 
+              7, 19, 6, NA, 15, 8, 10),
+            nrow = 4, byrow = TRUE)
+B <- c(8, 4, 12, 9, 15, 6)
+```
+
+Before implementing these tasks, try to write down a pseudo code. This is code-like text that may not be executable, but describes the structure of real code and details where and how major steps are implemented. Next, you'll need to write actual R code. For this, you will need to find answers to the following questions:
+
++ How to go through each of the element in matrix?
++ How to detect NA value?
++ How to drop an element of a given value from a vector?
++ How to add a row to an existing data frame?
+
+
+```{r}
+# your solution
+summ <- data.frame()
+
+for(i in 1:nrow(A)){
+   Arow <- A[i,]
+   Arow[is.na(Arow)] <- max(B)
+   A[i,] <- Arow
+   B <- B[-which(B == max(B))]
+   summ <- rbind(summ,data.frame(i,mean(B)))
+}
+
+A
+summ
+```
+
+
+## Warm-up 2: Find the best single predictor
+
+The first step of a stepwise forward regression is to find the single most powerful predictor in a univariate linear regression model for the target variable `GPP_NT_VUT_REF` among all fourteen available predictors in our data set (all except those of type `date` or `character`). Implement this first part of the search, using the definition of the stepwise-forward algorithm above. Remove all rows with at least one missing value before starting the predictor search.
+
+- Which predictor achieves the highest $R^2$? 
+- What value is the $R^2$?
+- Visualise $R^2$ for all univariate models, ordered by their respective $R^2$ values.
+- Do you note a particular pattern? Which variables yield similar $R^2$? How do you expect them to be included in multivariate models of the subsequent steps in the stepwise forward regression?
+
+_Hints_: 
+
++ Model structure: 
+   
+   - The "counter" variables in the for loop can be provided as a vector, and the counter will sequentially take on the value of each element in that vector. For example: `for (var in all_predictors){ ... }`.
+
+
++ Algorithm:
+
+   - To record $R^2$ values for the different models, you may start by creating an empty vector (`vec <- c()`) before the loop and then sequentially add elements to that vector inside the loop (`vec <- c(vec, new_element)`). Alternatively, you can do something similar, but with a data frame (initialising with `df_rsq <- data.frame()` before the loop, and adding rows by `df_rsq <- bind_rows(df_rsq, data.frame(pred = predictor_name, rsq = rsq_result))` inside the loop).
+
+   - A clever way how to construct formulas dynamically is described, for example in [this stackoverflow post](https://stackoverflow.com/questions/4951442/formula-with-dynamic-number-of-variables).
+   
++ Value retrieving: 
+
+   - Extract the $R^2$ from the linear model object: `summary(fit_lin)[["r.squared"]]`
+
++ Visualising:
+
+   - Search for solutions for how to change the order of levels to be plotted yourself.
+   
+```{r}
+# your solution
+ddf_ch <- read_csv('../../data/ch_lae_daily/ddf_for_08_application.csv')
+ddf <- ddf_ch %>% select(
+   -siteid,
+   -TIMESTAMP
+)
+names(ddf)
+ddf_vars <- names(ddf)
+var_outcome <- 'GPP_NT_VUT_REF'
+var_predictors <- ddf_vars[-which(ddf_vars == var_outcome)]
+var_predictors
+lm_summ <- c()
+for(predictor in var_predictors){
+   df_pre <- ddf %>% select(
+      var_outcome,
+      starts_with(predictor)
+   ) %>% drop_na()
+   fit_lin <- lm(as.formula(paste(var_outcome,"~",predictor)),df_pre)
+   lm_summ <- c(lm_summ, summary(fit_lin)[["r.squared"]])
+   print(paste(var_outcome,"~",predictor))
+}
+lm_summ <- data.frame(var_predictors,R2 = lm_summ)
+lm_summ
+
+## Visualization
+lm_summ$var_predictors <- factor(lm_summ$var_predictors, levels = lm_summ$var_predictors[order(lm_summ$R2)])
+lm_summ %>% ggplot(aes(x=var_predictors,y=R2)) + geom_bar(stat = "identity")
+levels(lm_summ$var_predictors)
+```
+
+
+*[Answer: 1.2. PPFD_IN reach the highest R2 of 0.531]*
+*[Answer: 3. LW_IN_F_MDS, LW_IN_F have similar R2; VPD_F_MDS and VPD_F have similar R2; TA_F and TA_F_MDS have similar R2; SW_IN_F, SW_IN_F_MDS, and PPFD_IN have similar R2; It means that these predictors are correlated with each other, we should remove similar predictors and only keep those less-correlated predictors]*
+
+## Full stepwise regression
+
+Now, we take it to the next level and implement a full stepwise forward regression as described above. For each step (number of predictors $k$), record the following metrics: $R^2$, *adjusted-*$R^2$, the Akaike Information Criterion (AIC), Bayesian Information Criterion (BIC), and the 5-fold cross-validation $R^2$ and RMSE.
+
+- Write pseudo-code for how you plan to implement the algorithm first.
+
+- Implement the algorithm in R, run it and display the order in which predictors enter the model.
+
+- Display a table with the metrics of all $k$ steps, and the single variable, added at each step.
+
+_Hints_: 
+
++ Model structure:
+   
+   - Recall what you learned in the breakout session, you may use the same idea on this task. Try to think of the blueprint (*pseudo-code*) first: How to go through different models in each forward step? How to store predictors added to the model and how to update candidate predictors? 
+
++ Algorithm:
+
+   - A complication is that the set of predictors is sequentially complemented at each step of the search through $k$. You may again use `vec <- list()` to create an empty vector, and then add elements to that vector by `vec <- c(vec, new_element)`.
+
+    - It may be helpful to explicitly define a set of "candidate predictors" that may potentially be added to the model as a vector (e.g., `preds_candidate`), and define predictors retained in the model from the previous step in a separate vector (e.g., `preds_retained`). In each step, search through `preds_candidate`, select the best predictor, add it to `preds_retained` and remove it from `preds_candidate`.
+
+   - At each step, record the metrics and store them in a data frame for later plots. As in the first "warm-up" exercise, you may record metrics at each step as a single-row data frame and sequentially stack (bind) them together.
+
+   - (As above) A clever way how to construct formulas dynamically is described, for example in [this stackoverflow post](https://stackoverflow.com/questions/4951442/formula-with-dynamic-number-of-variables).
+   
+   - The metrics for the $k$ models are assessed *after* the order of added variables is determined. To be able to determine the metrics, the $k$ models can be saved by constructing a list of models and sequentially add elements to that list (`mylist[[ name_new_element ]] <- new_element`). You can also fit the model again after determining which predictor worked best.
+     
+   - Your code will most certainly have bugs at first. To debug efficiently, write code first in a simple R script and use the debugging options in RStudio (see [here](https://support.rstudio.com/hc/en-us/articles/205612627-Debugging-with-RStudio)).
+  
+   
++ Value retriving
+
+  - To get AIC and BIC values for a given model, use the base-R functions `AIC()` and `BIC()`. 
+  
+  - To get the cross-validated $R^2$ and RMSE, use the caret function `train()` with RMSE as the loss function, and `method = "lm"` (to fit a linear regression model). Then extract the values by `trained_model$results$Rsquared` and `trained_model$results$RMSE`.
+  
++ Displaying: 
+
+  - To display a table nicely as part of the RMarkdown html output, use the function `knitr::kable()`
+  
+  - To avoid reordering of the list of variable names in plotting, change the type of variable names from "character" to "factor" by `pred <- factor(pred, levels = pred)`
+
+```{r}
+# your solution
+# load packages
+library(tidyverse)
+library(caret)
+library(knitr)
+
+# load data
+ddf_ch <- read_csv('../../data/ch_lae_daily/ddf_for_08_application.csv')
+ddf <- ddf_ch %>% select(
+   -siteid,
+   -TIMESTAMP
+) %>% drop_na()
+names(ddf)
+ddf_vars <- names(ddf)
+var_outcome <- 'GPP_NT_VUT_REF'
+var_predictors <- ddf_vars[-which(ddf_vars == var_outcome)]
+var_predictors # 14 predictors
+
+# initialization of predictos candidates and null linear model
+preds_candidate <- var_predictors
+preds_retained <- c()
+lm_null <- lm(as.formula(paste0(var_outcome,"~1")),ddf)
+summary(lm_null)
+lm_best <- lm_null
+lm_steplist <- list(lm_null) # also include null linear model
+# Start forward stepwise linear regression
+for(i in 1:14){
+   R2_cand <- c()
+   for (pred in preds_candidate) {
+      lm_cand <- update(lm_best,as.formula(paste0(". ~ . + ",pred)))
+      R2_cand <- c(R2_cand, summary(lm_cand)[["r.squared"]])
+   }
+   lm_best <- update(lm_best,as.formula(paste0(". ~ . + ",preds_candidate[which.max(R2_cand)])))
+   preds_retained <- c(preds_retained,preds_candidate[which.max(R2_cand)])
+   preds_candidate <- preds_candidate[-which.max(R2_cand)]
+   lm_steplist <- c(lm_steplist, list(lm_best))
+}
+
+# Check the list of linear models
+str(lm_steplist, max.level=1)
+summary(lm_steplist[[15]]) # the final full model, the predictors are added in each forward step
+preds_retained
+
+# Get the R2, adj-R2, AIC, BIC of different models
+getR2 <- function(x){
+   return (summary(x)$r.squared)
+}
+
+getadjR2 <- function(x){
+   return (summary(x)$adj.r.squared)
+}
+
+formula_col <- as.character(sapply(lm_steplist, formula))
+var_added_col <- c(1,preds_retained)
+R2_col <- sapply(lm_steplist, getR2)
+adjR2_col <- sapply(lm_steplist, getadjR2)
+AIC_col <- sapply(lm_steplist, AIC)
+BIC_col <- sapply(lm_steplist, BIC)
+
+
+# Use the caret train to refit the model and get 5-fold cv R2 and RMSE
+set.seed(42)
+
+my_cv <- trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 3
+)
+
+# retrain the model and get another 2 columns of metrics
+R2_5fold <- c()
+RMSE_5fold <- c()
+## not support null model so we start with i = 2 here.
+for (i in 2:length(lm_steplist)){
+   
+   lm_fit <- train(
+      form = formula(lm_steplist[[i]]),
+      data = ddf,
+      method = 'lm',
+      trControl = my_cv,
+      metric = "RMSE"
+   )
+   
+   R2_5fold <- c(R2_5fold, lm_fit$results$Rsquared)
+   RMSE_5fold <- c(RMSE_5fold, lm_fit$results$RMSE)
+}
+
+R2_5fold <- c(NA, R2_5fold)
+RMSE_5fold <- c(NA, RMSE_5fold)
+
+lm_metrics <- data.frame(
+   formula_col,
+   var_added_col,
+   R2_col,
+   adjR2_col,
+   AIC_col,
+   BIC_col,
+   R2_5fold,
+   RMSE_5fold
+)
+
+kable(lm_metrics,digits = 4, format = "html")
+
+```
+
+- Visualise all metrics as a function of the number of predictors (add labels for the variable names of the added predictor). Highlight the best-performing model based on the respective metric. How many predictors are in the best performing model, when assessed based on each metric?
+
+```{r}
+# your solution
+# delete elements we do not need for visualization
+library(scales)
+lm_metrics <- lm_metrics[2:15,]
+kable(lm_metrics[,-1], digits = 4)
+lm_metrics$var_added_col <- factor(lm_metrics$var_added_col, levels = lm_metrics$var_added_col)
+
+# Plot R2
+lm_metrics %>% ggplot(aes(x=var_added_col,y=R2_col,
+                          fill=factor(ifelse(R2_col == max(R2_col),"Highlighted","Normal"))
+                          )
+                      ) + 
+   geom_bar(stat = "identity") + 
+   scale_fill_manual(name = "Largest R2", values=c("red","grey50")) +
+   geom_hline(yintercept = max(lm_metrics$R2_col), col = 'red') +
+   coord_flip() +
+   labs(x= "Added Variable", y = "R2") + 
+   scale_y_continuous(limits=c(0.5,0.7),oob = rescale_none)
+
+
+# Plot adj R2
+lm_metrics %>% ggplot(aes(x=var_added_col,y=adjR2_col, 
+                          fill=factor(ifelse(adjR2_col == max(adjR2_col),"Highlighted","Normal"))
+                          )
+                      ) + 
+   geom_bar(stat = "identity") + 
+   scale_fill_manual(name = "Largest adjusted R2", values=c("red","grey50")) +
+   geom_hline(yintercept = max(lm_metrics$adjR2_col), col = 'red') +
+   coord_flip() +
+   labs(x= "Added Variable", y = "Adjusted R2") + 
+   scale_y_continuous(limits=c(0.5,0.7),oob = rescale_none)
+
+
+# Plot AIC
+lm_metrics %>% ggplot(aes(x=var_added_col,y=AIC_col, 
+                          fill=factor(ifelse(AIC_col == min(AIC_col),"Highlighted","Normal"))
+                          )
+                      ) + 
+   geom_bar(stat = "identity") + 
+   scale_fill_manual(name = "Minimum AIC", values=c("red","grey50")) +
+   geom_hline(yintercept = min(lm_metrics$AIC_col), col = 'red') +
+   coord_flip() +
+   labs(x= "Added Variable", y = "AIC") + 
+   scale_y_continuous(limits=c(min(lm_metrics$AIC_col),max(lm_metrics$AIC_col)),oob = rescale_none)
+
+
+#Plot BIC
+lm_metrics %>% ggplot(aes(x=var_added_col,y=BIC_col,
+                          fill=factor(ifelse(BIC_col == min(BIC_col),"Highlighted","Normal"))
+                          )
+                      ) + 
+   geom_bar(stat = "identity") + 
+   scale_fill_manual(name = "Minimum BIC", values=c("red","grey50")) +
+   geom_hline(yintercept = min(lm_metrics$BIC_col), col = 'red') +
+   coord_flip() +
+   labs(x= "Added Variable", y = "BIC") + 
+   scale_y_continuous(limits=c(min(lm_metrics$BIC_col)-10,max(lm_metrics$BIC_col)+10),oob = rescale_none)
+
+
+# Plot 5-fold cross-validation R2 
+lm_metrics %>% ggplot(aes(x=var_added_col,y=R2_5fold,
+                          fill=factor(ifelse(R2_5fold == max(R2_5fold),"Highlighted","Normal"))
+                          )
+                      ) + 
+   geom_bar(stat = "identity") + 
+   scale_fill_manual(name = "Maximum R2", values=c("red","grey50")) +
+   geom_hline(yintercept = max(lm_metrics$R2_5fold), col = 'red') +
+   coord_flip() +
+   labs(x= "Added Variable", y = "R2_5fold") + 
+   scale_y_continuous(limits=c(0.5,0.7),oob = rescale_none)
+
+
+# Plot 5-fold cross-validation RMSE
+lm_metrics %>% ggplot(aes(x=var_added_col,y=RMSE_5fold,
+                          fill=factor(ifelse(RMSE_5fold == min(RMSE_5fold),"Highlighted","Normal"))
+                          )
+                      ) + 
+   geom_bar(stat = "identity") + 
+   scale_fill_manual(name = "Miminum RMSE", values=c("red","grey50")) +
+   geom_hline(yintercept = min(lm_metrics$RMSE_5fold), col = 'red') +
+   coord_flip() +
+   labs(x= "Added Variable", y = "RMSE_5fold") + 
+   scale_y_continuous(limits=c(2.4,3),oob = rescale_none)
+
+best_model_by_metrics <- data.frame(
+   Metrics = c('R2','Adjusted R2','AIC','BIC','R2_5fold','RMSE_5fold'),
+   Formula = c(
+      lm_metrics$formula_col[which.max(lm_metrics$R2_col)],
+      lm_metrics$formula_col[which.max(lm_metrics$adjR2_col)],
+      lm_metrics$formula_col[which.min(lm_metrics$AIC_col)],
+      lm_metrics$formula_col[which.min(lm_metrics$BIC_col)],
+      lm_metrics$formula_col[which.max(lm_metrics$R2_5fold)],
+      lm_metrics$formula_col[which.min(lm_metrics$RMSE_5fold)]
+   )
+)
+
+kable(best_model_by_metrics)
+
+
+```
+
+- Observe which predictors are selected into the final model and which not. Why?
+
+*[From above 'best_model_by_metrics' table. Different metrics have different model formula. This is determined by the definition of metrics and how much penalty of the number of predictors it uses. For BIC,R2-5fold and RMSE-5fold, the final model is 'GPP_NT_VUT_REF ~ PPFD_IN + LW_IN_F_MDS + VPD_F + WS_F + SW_IN_F_MDS + CO2_F_MDS + TA_F + PA_F', it excludes TA_F_MDS, USTAR, P_F, VPD_F_MDS, LW_IN_F and SW_IN_F because it does not improve the performance any more. The inner reason is that these variables are correlated with some variables available in the model.]*
+
+
+- Whether it matters to the order of variables entering into the model which metric (i.e. AIC, BIC or $R^2$) is used? Why?
+
+*[Yes, it does matter. If we use R2 to determine whether a variable is added into the model, then the varibles will be added one by one and the final model will use all available variables, but if we use AIC/BIC, there will be a step when adding a variable increases the AIC/BIC so it will stop there.]*
+
+- Discuss your results. Which metric do you trust most? Why? Try out your algorithm without evaluating the cross-validated $R^2$. Do you get a computational efficiency gain? Which metric comes closest to the cross-validated $R^2$ in terms of selecting the same number predictors?
+
+*[I trust BIC most. Because it has same formula as cross-validation results and it includes less variables so that it will increase the computational efficiency if we use it for prediction. The BIC metric comes cloest to the cross validated R2.]*
+
+## [BONUS] Stepwise regression out-of-the-box
+   
+In R, you can also conduct the above variable selection procedures automatically. `regsubsets()` from leaps package provides a convenient way to do so. It does model selection by exhaustive search, including forward or backward stepwise regression. 
+
+- Do a stepwise forward regression using `regsubsets()`.
+- Create a data frame with the same metrics as above (except cross-validated $R^2$).
+- Visualise metrics as above.
+- Are your result consistent?
+    
+_Hints_: 
+
+- Specify stepwise *forward* by setting `method = "forward"`.
+- Specify the number of predictors to examine, that is all fourteen, by setting `nvmax = 14`.
+- AIC values of each step are stored in `summary(regfit.fwd)$cp` and BIC values of each step are in `summary(regfit.fwd)$bic`, etc.
+- Get order in which predictors $k$ are added (which corresponds to values returned by `summary(regfit.fwd)$bic`), by `all_predictors[regfit.fwd$vorder[2:15]-1]`. `vorder` is the order of variables entering into model. Note that `Intercept` is counted here as the first to enter into the model and should be removed.
+- To avoid reordering of the list of variable names in plotting, change the type of variable names from "character" to "factor" by `preds_enter <- factor(preds_enter, levels = preds_enter)`
+
+```{r}
+# your solution
+```

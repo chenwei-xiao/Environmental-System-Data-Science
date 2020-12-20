@@ -1,0 +1,283 @@
+---
+title: "Exercise Chapter 7"
+author: "Chenwei Xiao"
+date: "10/31/2020"
+output: html_document
+---
+
+## Load required packages
+```{r}
+library(tidyverse)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+library(caret)
+library(recipes)
+library(broom)
+library(pdp)
+library(vip)
+```
+
+## Adjusted-$R^2$
+
+Implement the formula for the adjusted-$R^2$ using simple "low-level" functions and $R^2$ defined as (i) the coefficient of determination and then as (ii) the square of the Pearson's correlation coefficient. Compare the values of the two with what is returned by `summary(lm(..))$adj.r.squared`. Which one of the two is used by `summary(lm(..))`? For your investigations, generate correlated random data and apply functions on it.
+
+Answer: As shown below, the adjuested R2 
+```{r}
+# your solution
+set.seed(123)
+
+n <- 100  # sample size
+b_2 <- 4
+b_1 <- 3
+b_0 <- 2
+
+df_demo <- data.frame(x1 = rnorm(n), x2 = rnorm(n)) %>%
+  mutate(y = b_2 * x2 + b_1 * x1 + b_0 + rnorm(n ,mean = 0 , sd = 1))  # no x2 here
+
+## fit model
+linmod_demo <- lm(y ~ x1 + x2, data = df_demo)
+
+summary(linmod_demo)
+
+y_obs <- df_demo$y
+y_pred <- linmod_demo$fitted.values
+
+R_2 <- function(y_obs, y_pred){
+  return (1 - sum((y_pred - y_obs)^2) / sum((y_obs - mean(y_obs))^2))
+}
+
+R_2_pearson <- function(y_obs, y_pred){
+  return ((sum((y_pred - mean(y_pred))*(y_obs - mean(y_obs))))^2/
+  (sum((y_obs - mean(y_obs))^2)*sum((y_pred - mean(y_pred))^2)))
+
+}
+
+adj_R2 <- function(y_obs, y_pred, p){
+  n <- length(y_obs)
+  R2 <- R_2(y_obs, y_pred)
+  return (1-(1-R2)*(n-1)/(n-p-1))
+}
+
+R_2(y_obs, y_pred)
+R_2_pearson(y_obs, y_pred)
+adj_R2(y_obs,y_pred,2)
+summary(linmod_demo)$adj.r.squared == adj_R2(y_obs,y_pred,2)
+
+
+```
+
+## Cross validation
+
+Assess the generalisability of three alternatives of a linear regression model for `GPP_NT_VUT_REF`: with one predictor (`PPFD_IN`), three predictors (`PPFD_IN`, `VPD_F`, and `TA_F,`), and all available predictors. Which model works best in terms of its generalisability, assessed by 5-fold cross-validation and using the RMSE as the loss function? Use the caret function `train()` with RMSE as the loss function.
+
+Use data from file `ddf_ch_lae.RData` (avoid `TIMESTAMP` and `NEE_VUT_REF_QC` as predictors).
+
+Answer: The third model(all available predictors) has the best performance with highest R_squared and lowest MAE and RMSE.
+
+**Hint**
+
+- To get the generalisation performance assessed during cross-validation (and not on the data held out from an initial split - which is not done here), you can use `summary(resamples(list(model1 = output_train1, ...)))`, where `output_train1` is the ouput of a `train()` function call with resampling.
+```{r}
+# your solution
+# Load dataset
+load("../../data/ddf_ch_lae/ddf_ch_lae.RData") # loads 'ddf_ch_lae'
+
+df <- ddf_ch_lae %>% 
+  select(-NEE_VUT_REF_QC, -TIMESTAMP) %>%  # not numeric features
+  drop_na()                                # drop rows with missing data
+
+df_train <- df # all used to train model
+
+pp_lm1 <- recipe(GPP_NT_VUT_REF ~ PPFD_IN, data = df_train) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%        # normalizes numeric data to have a mean of zero
+  step_scale(all_numeric(), -all_outcomes())             # normalizes numeric data to have a standard deviation of one
+
+pp_lm2 <- recipe(GPP_NT_VUT_REF ~ PPFD_IN + VPD_F + TA_F, data = df_train) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%        # normalizes numeric data to have a mean of zero
+  step_scale(all_numeric(), -all_outcomes())             # normalizes numeric data to have a standard deviation of one
+
+pp_lm3 <- recipe(GPP_NT_VUT_REF ~ ., data = df_train) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%        # normalizes numeric data to have a mean of zero
+  step_scale(all_numeric(), -all_outcomes())             # normalizes numeric data to have a standard deviation of one
+
+my_cv <- trainControl(
+  method = "repeatedcv",      # method define the resampling method such as 'boot', 'none', 'cv', etc.
+  number = 5,                # number of folds or number of resampling iterations
+  repeats = 3                 # the number of complete sets of folds to compute (only for repeated k-fold cross-validation)
+)
+
+set.seed(123)
+lm_fit1 <- train(
+  pp_lm1,
+  data = df_train,
+  method = "lm",
+  trControl = my_cv,
+  metric = "RMSE"
+)
+
+lm_fit2 <- train(
+  pp_lm2,
+  data = df_train,
+  method = "lm",
+  trControl = my_cv,
+  metric = "RMSE"
+)
+
+lm_fit3 <- train(
+  pp_lm3,
+  data = df_train,
+  method = "lm",
+  trControl = my_cv,
+  metric = "RMSE"
+)
+
+resamps <- resamples(list( lm_1 = lm_fit1,
+                           lm_2 = lm_fit2,
+                           lm_3 = lm_fit3))
+
+summary(resamps)
+
+## The third model has the best performance with highest R_squared and lowest MAE and RMSE.
+```
+
+We see that by including all predictors, we get the best model performance in terms of it cross-validation results, i.e., the lowest root mean square error (RMSE) and the highest $R^2$, averaged across folds.
+
+
+## Exploratory modelling
+
+Using the same data set as above (daily data for CH-Lae), find the model with the best performance, measured by evaluation against validation data held out from an initial split (30-70%). Use your own creativity to pre-process features and select variables, and chose between either a KNN or a multivariate linear regression, or any other ML model if you like (see models available with caret [here](https://topepo.github.io/caret/available-models.html)). Use all methods you've learned so far and impress your peers. Who gets the best generalisable model? Document and justify all steps you take.
+
+Use data from file `ddf_ch_lae.RData` (avoid `TIMESTAMP` and `NEE_VUT_REF_QC` as predictors).
+
+```{r}
+# Load dataset
+load("../../data/ddf_ch_lae/ddf_ch_lae.RData") # loads 'ddf_ch_lae'
+
+df <- ddf_ch_lae %>% 
+  select(-NEE_VUT_REF_QC, -TIMESTAMP) %>%  # not numeric features
+  drop_na()                                # drop rows with missing data
+
+set.seed(123)  # for reproducibility
+
+index_caret <- createDataPartition(
+  df$GPP_NT_VUT_REF, p = 0.7,
+  list = FALSE
+  )
+
+df_train <- df %>%
+  slice(index_caret)
+
+df_test <- df %>%
+  slice(-index_caret)
+
+pp_knn <- recipe(GPP_NT_VUT_REF ~ ., data = df_train) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%        # normalizes numeric data to have a mean of zero
+  step_scale(all_numeric(), -all_outcomes())             # normalizes numeric data to have a standard deviation of one
+
+my_cv <- trainControl(
+  method = "repeatedcv",      # method define the resampling method such as 'boot', 'none', 'cv', etc.
+  number = 10,                # number of folds or number of resampling iterations
+  repeats = 5                 # the number of complete sets of folds to compute (only for repeated k-fold cross-validation)
+)
+
+my_cv2 <- trainControl(
+  method = "repeatedcv",      # method define the resampling method such as 'boot', 'none', 'cv', etc.
+  number = 5,                # number of folds or number of resampling iterations
+  repeats = 1                 # the number of complete sets of folds to compute (only for repeated k-fold cross-validation)
+)
+
+lambda_grid <- data.frame(lambda = 10^(-3:2))
+hyper_grid <- data.frame(k = c(22:26))
+C_grid <- data.frame(C = 10^(-3:2))
+set.seed(123)
+
+lm_fit3 <- train(
+  pp_knn,
+  data = df_train,
+  method = "lm",
+  trControl = my_cv,
+  metric = "RMSE"
+)
+
+# Ridge regression
+ridge_fit <- train(
+  pp_knn,
+  data = df_train,
+  method = "ridge",
+  trControl = my_cv,
+  tuneGrid = lambda_grid,
+  metric = "RMSE"
+)
+
+
+knn_fit <- train(
+  pp_knn,
+  data = df_train,
+  method = "knn",
+  trControl = my_cv,
+  tuneGrid = hyper_grid,
+  metric = "RMSE"
+)
+
+# Linear SVM regression
+svr_fit <- train(
+  pp_knn,
+  data = df_train,
+  method = "svmLinear",
+  trControl = my_cv2,
+  tuneGrid = C_grid,
+  metric = "RMSE"
+)
+
+df_test$GPP_NT_VUT_REF_predicted <- predict(knn_fit, newdata = df_test) # best at k = 24
+df_knn <- df_test %>% yardstick::metrics(GPP_NT_VUT_REF, GPP_NT_VUT_REF_predicted)
+df_test$GPP_NT_VUT_REF_predicted <- predict(lm_fit3, newdata = df_test) # best for all as predictors
+df_lm <- df_test %>% yardstick::metrics(GPP_NT_VUT_REF, GPP_NT_VUT_REF_predicted) # better performance than knn
+df_test$GPP_NT_VUT_REF_predicted <- predict(ridge_fit, newdata = df_test) # best for all as predictors
+df_ridge <- df_test %>% yardstick::metrics(GPP_NT_VUT_REF, GPP_NT_VUT_REF_predicted) # better performance than knn
+df_test$GPP_NT_VUT_REF_predicted <- predict(svr_fit, newdata = df_test) # best for all as predictors
+df_svr <- df_test %>% yardstick::metrics(GPP_NT_VUT_REF, GPP_NT_VUT_REF_predicted) # better performance than knn
+
+df_metric <- data.frame(df_lm$.estimate,df_ridge$.estimate,df_knn$.estimate,df_svr$.estimate)
+rownames(df_metric) <- c('RMSE','R2','MAE')
+colnames(df_metric) <- c('lm','ridge','knn','svr')
+df_metric
+
+## From above analysis, the SVM linear regression method has best performance with lowest RMSE and MAE but ridge regression has best performance on linear correlation for its highest R2.
+```
+
+**Bonus problem below**
+
+## Resampling
+
+Define a resampling function of the form `my_resample_folds_nested(df, k)` generating $k$ folds and taking a data frame `df` as arguments. This function should return a nested data frame with $k$ rows and two columns `train` and `test` that contain nested dataframes for training and testing data with each fold. Use data from file `ddf_ch_lae.RData` (avoid `TIMESTAMP` and `NEE_VUT_REF_QC` as predictors).
+Please print the dimensions of the whole data frame and run head() of fold two of the column 'train' of the nested data frame (this is just to make the peer review easier).
+
+*"Relief option:"* You may create two separate flat data frames, one with testing, and one with training data, where one column specifies which fold each row belongs to. 
+
+*Hints:*
+
+- Use the caret function `createFolds` to split a vector of row indices into a list of length corresponding to the number of folds, where each list element cotains the indices of the training resamples for the respective fold.
+- Use the dplyr function `slice()` to subset a dataframe by row numbers.
+- Use `group_by()` in combination with `nest()` for nesting data frames for each of the $k$ folds and end up with a dataframe that has $k$ rows.
+```{r}
+# your solution
+```
+
+Fit a linear model of the form `GPP_NT_VUT_REF ~ PPFD_IN` (i) directly on all the data in `df`, and (ii) on the resampled **training** folds. 
+
+Evaluate the models by calculating metrics (squared Pearson's correlation coefficient, and RMSE) of predictions made for (i) on the full dataframe `df`, and for (ii) on each respective **testing** fold separately. For (ii), report the mean across metrics calculated on each testing fold. 
+
+If this sounds confusing: Just implement a k-fold cross-validation as described also in the tutorial and report the cross-validation metrics.
+
+*Hints:* (Feel free to come up with a solution that doesn't make use of these hints.)
+
+- You may use `mutate( newcol = purrr::map( nested_col, ~function_name(.)) )` to apply a function `function_name()` on each of the nested data frames in column `nested_col`. The `.` refers to the position at which the argument `nested_col` goes.
+- You may use the broom function `augment()` to add a column `.fitted` to a data frame, given a model object that was generated using predictors that are available as columns in the respective data frame.
+- You may use `mutate( newcol = purrr::map2( arg1, arg2, ~function_name(.x, .y)) )` to apply a function `function_name()` that takes two arguments from other columns in the same data frame. The `.x` and `.y` refer to the position at which the two arguments go.
+```{r}
+# your solution
+```
